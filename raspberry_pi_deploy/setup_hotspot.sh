@@ -19,6 +19,7 @@ fi
 nmcli connection delete "$CON_NAME" >/dev/null 2>&1 || true
 
 nmcli connection add type wifi ifname "$IFACE" con-name "$CON_NAME" autoconnect yes ssid "$SSID"
+nmcli connection modify "$CON_NAME" connection.autoconnect-priority 100
 nmcli connection modify "$CON_NAME" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared
 nmcli connection modify "$CON_NAME" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASSWORD"
 nmcli connection up "$CON_NAME"
@@ -27,4 +28,3 @@ echo "Pluto hotspot is running."
 echo "SSID: $SSID"
 echo "PASS: $PASSWORD"
 echo "Website: http://10.42.0.1:8080"
-
