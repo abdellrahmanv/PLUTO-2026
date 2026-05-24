@@ -98,8 +98,8 @@ After reboot, verify:
 
 ```bash
 ip addr show wlan0
-sudo systemctl status pluto-hotspot
-sudo systemctl status pluto-motors-test
+sudo systemctl status pluto-system
+sudo journalctl -u pluto-system -n 80 --no-pager
 ```
 
 `wlan0` should show `10.42.0.1`.

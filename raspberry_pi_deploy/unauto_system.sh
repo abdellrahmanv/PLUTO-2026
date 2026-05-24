@@ -3,6 +3,7 @@ set -euo pipefail
 
 SERVICE_NAME="pluto-motors-test"
 HOTSPOT_SERVICE="pluto-hotspot"
+SYSTEM_SERVICE="pluto-system"
 HOTSPOT_NAME="pluto-hotspot"
 
 if [ "$EUID" -ne 0 ]; then
@@ -15,6 +16,14 @@ systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
 echo "Disabling Pluto website auto-start..."
 systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+
+echo "Stopping Pluto system boot service..."
+systemctl stop "${SYSTEM_SERVICE}" >/dev/null 2>&1 || true
+
+echo "Disabling Pluto system boot service..."
+systemctl disable "${SYSTEM_SERVICE}" >/dev/null 2>&1 || true
+
+rm -f "/etc/systemd/system/${SYSTEM_SERVICE}.service"
 
 echo "Stopping Pluto hotspot boot service..."
 systemctl stop "${HOTSPOT_SERVICE}" >/dev/null 2>&1 || true

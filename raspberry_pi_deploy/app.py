@@ -195,6 +195,11 @@ def index():
     return HTML_PAGE
 
 
+@app.get("/health")
+def health():
+    return "PLUTO_OK\n", 200, {"Content-Type": "text/plain"}
+
+
 @app.get("/api/status")
 def api_status():
     return jsonify(bridge.status())
