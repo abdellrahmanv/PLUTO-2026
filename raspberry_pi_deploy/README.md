@@ -32,7 +32,7 @@ From the repo root on the Pi:
 
 ```bash
 cd raspberry_pi_deploy
-chmod +x install.sh setup_hotspot.sh run.sh
+chmod +x install.sh setup_hotspot.sh run.sh auto_system.sh unauto_system.sh
 ./install.sh
 ```
 
@@ -71,7 +71,25 @@ http://10.42.0.1:8080
 
 ## Run On Boot
 
-After `./install.sh`:
+The easiest way:
+
+```bash
+./auto_system.sh
+```
+
+After that, every time the Raspberry Pi powers on:
+
+- The Pluto hotspot starts.
+- The motors test website starts.
+- You can join `Pluto-Motors` and open `http://10.42.0.1:8080`.
+
+To undo auto-start and return the Pi to normal:
+
+```bash
+sudo ./unauto_system.sh
+```
+
+Manual systemd commands, if needed:
 
 ```bash
 sudo systemctl enable pluto-motors-test
@@ -89,4 +107,3 @@ sudo systemctl status pluto-motors-test
 First tests must be done with the hoverboard wheels lifted off the ground.
 
 The web app sends heartbeat pings. If the Pi dies or the app stops, the STM32 should stop the motors after its timeout.
-

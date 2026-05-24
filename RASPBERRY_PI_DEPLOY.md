@@ -32,3 +32,22 @@ Important safety rule:
 
 Test with the hoverboard lifted off the ground first.
 
+Pi install:
+
+```bash
+cd raspberry_pi_deploy
+chmod +x install.sh setup_hotspot.sh run.sh auto_system.sh unauto_system.sh
+./install.sh
+```
+
+Auto-start website + WiFi hotspot on every Raspberry Pi power-up:
+
+```bash
+./auto_system.sh
+```
+
+Undo auto-start and restore normal startup/network behavior:
+
+```bash
+sudo ./unauto_system.sh
+```
