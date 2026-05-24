@@ -1,0 +1,14 @@
+.metadata/
+*.log
+*.tmp
+*.bak
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# STM32CubeIDE generated build output
+pluto32stm/Debug/
+pluto32stm/Release/
+pluto32stm/**/Backup/
