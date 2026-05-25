@@ -26,6 +26,7 @@ README.md
 ARCHITECTURE.md
 MODES.md
 SYSTEMS_ENGINEERING.md
+SYSTEM_REQUIREMENTS.md
 ```
 
 Before implementation, each subsystem must have:
@@ -398,4 +399,3 @@ A feature is done only when:
 - It has a debug log or telemetry path.
 - It fails safe.
 - It is documented.
-

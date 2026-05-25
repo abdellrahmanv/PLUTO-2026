@@ -24,3 +24,5 @@ Pluto code should be implemented with a systems-engineering workflow:
 - then integrate the next layer.
 
 See `SYSTEMS_ENGINEERING.md` before adding new robot behavior.
+
+System requirements and state decomposition live in `SYSTEM_REQUIREMENTS.md`.
