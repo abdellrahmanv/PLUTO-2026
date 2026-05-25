@@ -21,6 +21,7 @@ IF-xxx         Interface requirement
 SAFE-xxx       Safety requirement
 BOOT-xxx       Bootstrap/setup requirement
 HW-xxx         Hardware detection requirement
+WEB-xxx        Operator website requirement
 STATE-x        Robot state
 STATE-x.y      State requirement
 STATE-x.y.z    State subrequirement
@@ -53,6 +54,7 @@ Every requirement should have:
 | SYS-008 | Pluto shall be testable one subsystem at a time before full integration. | All | Verification checklist |
 | SYS-009 | Pluto shall provide an automatic Raspberry Pi setup path that installs, configures, validates, and reports the system state. | Pi | Bootstrap verification |
 | SYS-010 | Pluto shall provide actionable diagnostics when automatic setup cannot recover a required subsystem. | Pi | Fault injection |
+| SYS-011 | Pluto shall provide an operator website identified as project `PLUTO`. | Pi | Website test |
 
 ## Safety Requirements
 
@@ -144,6 +146,58 @@ itself for operation from a fresh clone or partially broken local environment.
 | REC-005 | Pi shall keep STM32 in safe stop while recovering connections. | Pi + STM32 | Serial log |
 | REC-006 | Pi shall escalate to ERROR if a required subsystem cannot recover. | Pi | Fault injection |
 | REC-007 | Pi shall include last successful step and failed step in recovery logs. | Pi | Log review |
+
+## Operator Website Requirements
+
+The website is Pluto's operator console. It observes the system, requests state
+transitions, and exposes diagnostics. It shall not bypass the mode manager or
+STM32 safety layer.
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| WEB-001 | Website shall clearly identify the project as `PLUTO`. | Pi | UI inspection |
+| WEB-002 | Website shall show live camera feed when camera hardware is available. | Pi | Camera UI test |
+| WEB-003 | Website shall show camera unavailable status when camera feed cannot start. | Pi | Camera unplug test |
+| WEB-004 | Website shall show current system state. | Pi | State UI test |
+| WEB-005 | Website shall show current substate when a state has substates. | Pi | WELCOME substate test |
+| WEB-006 | Website shall show allowed next states based on current state and safety gates. | Pi | Transition UI test |
+| WEB-007 | Website shall allow operator to request a next state, not directly force internal state variables. | Pi | Mode manager test |
+| WEB-008 | Website shall block unavailable or unsafe state choices. | Pi | Safety gate test |
+| WEB-009 | Website shall show STM32 connection status. | Pi | Serial disconnect test |
+| WEB-010 | Website shall show Uno connection status. | Pi | Serial disconnect test |
+| WEB-011 | Website shall show battery voltage/status when available. | Pi | Telemetry UI test |
+| WEB-012 | Website shall show obstacle readings/status when available. | Pi | Telemetry UI test |
+| WEB-013 | Website shall show current fault/warning reason when any subsystem reports one. | Pi | Fault injection |
+| WEB-014 | Website shall provide an emergency stop control visible from every page/view. | Pi | UI inspection |
+| WEB-015 | Emergency stop from website shall send `CMD:STOP` and request ERROR or safe stop state. | Pi + STM32 | E-stop UI test |
+| WEB-016 | Website shall provide controlled system shutdown command. | Pi | Shutdown test |
+| WEB-017 | Shutdown command shall require confirmation before execution. | Pi | UI test |
+| WEB-018 | Shutdown command shall send `CMD:STOP` before shutting down Pi. | Pi + STM32 | Serial log |
+| WEB-019 | Website shall show bootstrap/self-test report. | Pi | Report UI test |
+| WEB-020 | Website shall show clear instructions for missing required hardware. | Pi | Missing hardware test |
+| WEB-021 | Website shall expose logs or latest events needed for debugging. | Pi | Log UI test |
+| WEB-022 | Website shall not expose raw motor commands outside MANUAL or diagnostic mode. | Pi | Route/API test |
+| WEB-023 | Website shall remain responsive enough for operator use while camera preview is active. | Pi | UI latency test |
+| WEB-024 | Website shall be usable from phone or laptop screen sizes. | Pi | Responsive UI test |
+| WEB-025 | Website shall present state names using the same names as requirements: BOOTSTRAP, IDLE, MANUAL, WELCOME, DANCE, ERROR, GAME_LATER. | Pi | UI inspection |
+
+### Website Timing Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| WEB-TIME-001 | Website shall update displayed current state within 500 ms of mode manager state change. | Pi | UI timing test |
+| WEB-TIME-002 | Website shall update STM32 connection status within 1000 ms of connect/disconnect detection. | Pi | Disconnect timing test |
+| WEB-TIME-003 | Camera preview should display at least 1 FPS in IDLE when enabled. | Pi | FPS test |
+| WEB-TIME-004 | Emergency stop button action shall send stop request within 150 ms of operator activation. | Pi | E-stop latency test |
+
+### Website Safety Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| WEB-SAFE-001 | Website shall never be the only safety layer for motor stop. | Pi + STM32 | Architecture review |
+| WEB-SAFE-002 | Website shall not allow MANUAL, WELCOME, or DANCE if STM32 is unavailable. | Pi | Safety gate test |
+| WEB-SAFE-003 | Website shall not allow MANUAL, WELCOME, or DANCE if battery status is critical. | Pi | Battery gate test |
+| WEB-SAFE-004 | Website shall not allow new mode selection during WELCOME_RETURN except emergency stop. | Pi | Return gate test |
 
 ## Interface Requirements
 
@@ -262,6 +316,7 @@ that makes the rest of the robot reliable.
 | STATE-0.52 | Report shall include exact failed command or probe when a check fails. | Pi | Fault injection |
 | STATE-0.53 | Report shall include suggested next action for each failed required check. | Pi | Fault injection |
 | STATE-0.54 | Report shall be available in logs and through the operator interface when available. | Pi | Log/UI test |
+| STATE-0.55 | BOOTSTRAP shall validate website dependencies if website feature is enabled. | Pi | Website bootstrap test |
 
 ### Exit Requirements
 
@@ -284,6 +339,7 @@ that makes the rest of the robot reliable.
 | VER-BOOT-007 | Break a service definition. | setup reports service validation failure |
 | VER-BOOT-008 | Remove Python dependency. | setup repairs dependency or reports package failure |
 | VER-BOOT-009 | Run diagnostic-only mode. | no changes made, full report produced |
+| VER-BOOT-010 | Enable website feature during bootstrap. | website dependencies valid, report includes website |
 
 ## STATE-1: IDLE
 
@@ -313,6 +369,8 @@ Pluto is awake, safe, observant, and visually alive, but not moving.
 | STATE-1.14 | IDLE shall keep face/LCD alive with idle expression. | Uno | LCD observation |
 | STATE-1.15 | IDLE shall run only low-cost vision if enabled. | Pi | CPU/log check |
 | STATE-1.16 | IDLE shall keep the control interface available if enabled. | Pi | Local connection test |
+| STATE-1.17 | IDLE website view shall show camera preview if enabled and available. | Pi | Website camera test |
+| STATE-1.18 | IDLE website view shall show current state as `IDLE` and allowed next states. | Pi | Website state test |
 
 ### Face And LCD Subrequirements
 
@@ -379,6 +437,7 @@ Pluto is awake, safe, observant, and visually alive, but not moving.
 | VER-IDLE-006 | Place obstacle in front during IDLE. | `OBS:` changes, no movement triggered |
 | VER-IDLE-007 | Trigger MANUAL from IDLE. | `CMD:STOP` then mode changes to MANUAL |
 | VER-IDLE-008 | Measure STM32 ping response time in IDLE. | `ACK:PING` within 100 ms |
+| VER-IDLE-009 | Open website in IDLE. | project `PLUTO`, camera preview/status, current state, next states |
 
 ## STATE-2: MANUAL
 
@@ -413,6 +472,7 @@ chain before autonomous behavior is added.
 | STATE-2.14 | MANUAL shall send `CMD:STOP` immediately when input is released. | Pi | Release test |
 | STATE-2.15 | MANUAL shall display active manual status on Uno. | Pi + Uno | LCD observation |
 | STATE-2.16 | MANUAL shall continuously read STM32 telemetry and alerts. | Pi | `TEL:` and `ALERT:` log |
+| STATE-2.17 | MANUAL website view shall show manual controls only while MANUAL is active. | Pi | Website mode test |
 
 ### Manual Control Subrequirements
 
@@ -462,6 +522,7 @@ chain before autonomous behavior is added.
 | VER-MANUAL-005 | Place obstacle in front and command forward. | STM32 blocks forward motion |
 | VER-MANUAL-006 | Unplug STM32 during MANUAL. | ERROR state, no further drive commands |
 | VER-MANUAL-007 | Measure operator input to serial command latency. | command written within 150 ms |
+| VER-MANUAL-008 | Open website in MANUAL. | manual controls visible, current state MANUAL |
 
 ## STATE-3: WELCOME
 
@@ -682,6 +743,7 @@ ERROR is a state, not a crash.
 | STATE-5.10 | ERROR shall keep trying to read STM32 status if connected. | Pi | Serial log |
 | STATE-5.11 | ERROR shall not send nonzero drive commands. | Pi | Serial log |
 | STATE-5.12 | ERROR shall present clear operator-visible fault status. | Pi + Uno | UI/LCD observation |
+| STATE-5.14 | ERROR website view shall show fault reason, failed subsystem, and allowed recovery action. | Pi | Website fault test |
 | STATE-5.13 | ERROR may allow diagnostics commands that cannot move motors. | Pi | Diagnostic test |
 
 ### Recovery Requirements
@@ -702,6 +764,7 @@ ERROR is a state, not a crash.
 | VER-ERROR-003 | Unplug STM32 during motion state. | ERROR state, motion commands stop |
 | VER-ERROR-004 | Attempt DANCE while in ERROR. | rejected transition |
 | VER-ERROR-005 | Reset after fault cleared. | STM32 identity verified, IDLE |
+| VER-ERROR-006 | Open website in ERROR. | fault reason and recovery action visible |
 
 ## STATE-6: GAME_LATER
 
@@ -730,6 +793,21 @@ GAME_LATER is not implemented in v1.
 | VER-GAME-001 | Request GAME in v1. | unavailable response, no mode entry |
 | VER-GAME-002 | Inspect command log after game request. | no motor command |
 
+## Operator Website Verification Plan
+
+| ID | Test | Expected Evidence |
+| --- | --- | --- |
+| VER-WEB-001 | Open website home page. | `PLUTO` visible as project identity |
+| VER-WEB-002 | Open website with camera connected. | live camera feed visible |
+| VER-WEB-003 | Open website with camera disconnected. | camera unavailable status visible |
+| VER-WEB-004 | Change mode from IDLE to MANUAL through website. | mode request logged, current state updates |
+| VER-WEB-005 | Attempt unsafe mode while STM32 missing. | choice blocked, clear reason shown |
+| VER-WEB-006 | Press emergency stop from website. | `CMD:STOP` sent within 150 ms |
+| VER-WEB-007 | Request system shutdown from website. | confirmation required, `CMD:STOP` before shutdown |
+| VER-WEB-008 | View bootstrap report from website. | hardware pass/fail and suggested actions visible |
+| VER-WEB-009 | Open website on phone viewport. | controls and status readable without overlap |
+| VER-WEB-010 | Verify manual raw motor routes are unavailable outside MANUAL. | rejected request |
+
 ## Cross-State Transition Requirements
 
 | ID | Requirement | Owner | Verification |
@@ -743,18 +821,19 @@ GAME_LATER is not implemented in v1.
 | TRANS-007 | Motion states shall be blocked if battery status is critical. | Pi | Battery transition test |
 | TRANS-008 | Normal runtime shall begin with BOOTSTRAP before IDLE. | Pi | Boot flow test |
 | TRANS-009 | BOOTSTRAP shall be the only state allowed to perform setup/repair actions. | Pi | State audit |
+| TRANS-010 | Website state requests shall pass through mode manager transition validation. | Pi | Mode manager test |
 
 ## Requirement-To-Interface Trace
 
-| State | STM32 Commands | STM32 Inputs | Uno Commands | Other Inputs |
-| --- | --- | --- | --- | --- |
-| BOOTSTRAP | `CMD:PING`, `CMD:STOP` | `ID`, `ACK`, `TEL`, `OBS`, `ALERT` | `ID?` or probe, optional `MODE:BOOT` | OS packages, Python env, serial devices, camera, audio |
-| IDLE | `CMD:PING`, `CMD:STOP` | `ID`, `TEL`, `OBS`, `ALERT` | `MODE:IDLE`, `FACE:IDLE` | optional low-rate camera |
-| MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | operator controls |
-| WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN`, `CMD:RESET_HOME` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | vision/speech/crowd target |
-| DANCE | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, optional `CMD:ARM` | `ACK`, `OBS`, `ALERT` | `MODE:DANCE`, `FACE:DANCE` | audio file, operator start |
-| ERROR | `CMD:STOP`, `CMD:PING` | `ID`, `TEL`, `ALERT` | `MODE:ERROR`, `WARN` | reset request |
-| GAME_LATER | none in v1 | none in v1 | `TEXT:Game later` | operator request |
+| State | STM32 Commands | STM32 Inputs | Uno Commands | Website Behavior | Other Inputs |
+| --- | --- | --- | --- | --- | --- |
+| BOOTSTRAP | `CMD:PING`, `CMD:STOP` | `ID`, `ACK`, `TEL`, `OBS`, `ALERT` | `ID?` or probe, optional `MODE:BOOT` | show bootstrap report if available | OS packages, Python env, serial devices, camera, audio |
+| IDLE | `CMD:PING`, `CMD:STOP` | `ID`, `TEL`, `OBS`, `ALERT` | `MODE:IDLE`, `FACE:IDLE` | camera feed/status, current state, allowed next states | optional low-rate camera |
+| MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | manual controls, telemetry, emergency stop | operator controls |
+| WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN`, `CMD:RESET_HOME` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | current substate, return lock status, emergency stop | vision/speech/crowd target |
+| DANCE | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, optional `CMD:ARM` | `ACK`, `OBS`, `ALERT` | `MODE:DANCE`, `FACE:DANCE` | dance start/stop/status, emergency stop | audio file, operator start |
+| ERROR | `CMD:STOP`, `CMD:PING` | `ID`, `TEL`, `ALERT` | `MODE:ERROR`, `WARN` | fault reason, diagnostics, allowed recovery | reset request |
+| GAME_LATER | none in v1 | none in v1 | `TEXT:Game later` | unavailable message | operator request |
 
 ## Timing-To-Test Trace
 
@@ -819,6 +898,36 @@ GAME_LATER is not implemented in v1.
 | HW-011 | STATE-0.41 | motion block test |
 | HW-012 | STATE-0.52, STATE-0.53 | fault report review |
 
+## Website-To-Test Trace
+
+| Website ID | Related Requirements | Verification |
+| --- | --- | --- |
+| WEB-001 | SYS-011 | `VER-WEB-001` |
+| WEB-002 | HW-004, STATE-1.17 | `VER-WEB-002` |
+| WEB-003 | HW-004, STATE-0.22 | `VER-WEB-003` |
+| WEB-004 | TRANS-001 | `VER-WEB-004` |
+| WEB-005 | WELCOME substates | WELCOME substate UI test |
+| WEB-006 | TRANS-010 | transition UI test |
+| WEB-007 | TRANS-010 | `VER-WEB-004` |
+| WEB-008 | WEB-SAFE-002, WEB-SAFE-003, WEB-SAFE-004 | `VER-WEB-005` |
+| WEB-009 | HW-001 | STM32 disconnect UI test |
+| WEB-010 | HW-002 | Uno disconnect UI test |
+| WEB-011 | PWR-002 | telemetry UI test |
+| WEB-012 | IF-STM32-008 | obstacle UI test |
+| WEB-013 | STATE-5.14 | `VER-ERROR-006` |
+| WEB-014 | SYS-007 | UI inspection |
+| WEB-015 | SAFE-004 | `VER-WEB-006` |
+| WEB-016 | system shutdown | `VER-WEB-007` |
+| WEB-017 | system shutdown | confirmation UI test |
+| WEB-018 | SAFE-004 | shutdown serial log |
+| WEB-019 | STATE-0.54 | `VER-WEB-008` |
+| WEB-020 | HW-012 | missing hardware UI test |
+| WEB-021 | SYS-005 | log UI test |
+| WEB-022 | SAFE-005 | `VER-WEB-010` |
+| WEB-023 | WEB-TIME-001, WEB-TIME-003 | UI latency test |
+| WEB-024 | operator usability | `VER-WEB-009` |
+| WEB-025 | state naming | UI inspection |
+
 ## Implementation Gate
 
 Before code for a state begins:
@@ -829,6 +938,7 @@ Before code for a state begins:
 4. Safety behavior must be explicit.
 5. Any mismatch between docs, firmware, and wiring must be resolved.
 6. Bootstrap impact must be defined for any new dependency or hardware device.
+7. Website impact must be defined for any new state, fault, or operator action.
 
 The next code implementation should start with the validation tools required to
 prove `IF-STM32-*` and `IF-UNO-*`, not with high-level behavior.
