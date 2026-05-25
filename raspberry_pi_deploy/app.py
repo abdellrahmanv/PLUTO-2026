@@ -330,12 +330,25 @@ HTML_PAGE = r"""<!doctype html>
       font-weight: 700;
       cursor: pointer;
       touch-action: manipulation;
+      transition: background-color 0.1s, transform 0.1s;
     }
     button:active { transform: scale(0.98); }
+    button.active-drive {
+      background: var(--accent) !important;
+      color: #0d100e !important;
+      border-color: var(--accent) !important;
+      transform: scale(0.95);
+      box-shadow: 0 0 12px rgba(70, 211, 125, 0.4);
+    }
     .stop {
       background: var(--danger);
       border-color: var(--danger);
       color: #fff;
+    }
+    .stop.active-drive {
+      background: #ff3333 !important;
+      color: #fff !important;
+      border-color: #ff3333 !important;
     }
     .secondary { font-size: 14px; min-height: 46px; }
     .wide { grid-column: 1 / span 3; }
@@ -440,6 +453,16 @@ HTML_PAGE = r"""<!doctype html>
     const speedValue = document.querySelector("#speedValue");
     const steerValue = document.querySelector("#steerValue");
 
+    const driveButtons = {};
+    document.querySelectorAll("[data-drive]").forEach(btn => {
+      driveButtons[btn.dataset.drive] = btn;
+    });
+
+    function setButtonActive(kind, active) {
+      const btn = driveButtons[kind];
+      if (btn) btn.classList.toggle("active-drive", active);
+    }
+
     function post(path, body = {}) {
       return fetch(path, {
         method: "POST",
@@ -459,13 +482,41 @@ HTML_PAGE = r"""<!doctype html>
       post("/api/drive", payload);
     }
 
+    let activeDriveType = null;
+
+    function handleStart(kind, e) {
+      if (e) e.preventDefault();
+      if (activeDriveType === kind) return;
+      if (activeDriveType) handleRelease();
+      activeDriveType = kind;
+      setButtonActive(kind, true);
+      drive(kind);
+    }
+
+    function handleRelease(e) {
+      if (e) e.preventDefault();
+      if (!activeDriveType) return;
+      setButtonActive(activeDriveType, false);
+      activeDriveType = null;
+      post("/api/stop");
+    }
+
     /* --- touch / pointer controls --- */
     document.querySelectorAll("[data-drive]").forEach(btn => {
-      btn.addEventListener("pointerdown", (e) => { e.preventDefault(); drive(btn.dataset.drive); });
-      btn.addEventListener("pointerup",     () => post("/api/stop"));
-      btn.addEventListener("pointerleave",  () => post("/api/stop"));
-      btn.addEventListener("pointercancel", () => post("/api/stop"));
-      btn.addEventListener("contextmenu",   (e) => e.preventDefault());
+      const kind = btn.dataset.drive;
+      
+      // Support both pointer and touch events
+      btn.addEventListener("pointerdown", (e) => handleStart(kind, e));
+      btn.addEventListener("touchstart", (e) => handleStart(kind, e), { passive: false });
+      
+      btn.addEventListener("pointerup", (e) => handleRelease(e));
+      btn.addEventListener("touchend", (e) => handleRelease(e), { passive: false });
+      
+      btn.addEventListener("pointerleave", (e) => handleRelease(e));
+      btn.addEventListener("pointercancel", (e) => handleRelease(e));
+      btn.addEventListener("touchcancel", (e) => handleRelease(e), { passive: false });
+      
+      btn.addEventListener("contextmenu", (e) => e.preventDefault());
     });
 
     /* --- keyboard arrow controls --- */
@@ -474,15 +525,24 @@ HTML_PAGE = r"""<!doctype html>
     document.addEventListener("keydown", (e) => {
       if (!keyMap[e.key] || keysDown.has(e.key)) return;
       keysDown.add(e.key);
-      drive(keyMap[e.key]);
+      const kind = keyMap[e.key];
+      setButtonActive(kind, true);
+      drive(kind);
     });
     document.addEventListener("keyup", (e) => {
       if (!keyMap[e.key]) return;
       keysDown.delete(e.key);
+      const kind = keyMap[e.key];
+      setButtonActive(kind, false);
       if (keysDown.size === 0) post("/api/stop");
     });
 
-    document.querySelector("#stop").onclick   = () => post("/api/stop");
+    document.querySelector("#stop").onclick   = () => {
+      const stopBtn = document.querySelector("#stop");
+      stopBtn.classList.add("active-drive");
+      setTimeout(() => stopBtn.classList.remove("active-drive"), 150);
+      post("/api/stop");
+    };
     document.querySelector("#return").onclick = () => post("/api/return");
     document.querySelector("#reset").onclick  = () => post("/api/reset_odom");
     document.querySelector("#arm").onclick    = () => post("/api/arm", {
