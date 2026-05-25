@@ -245,8 +245,9 @@ HTML_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Pluto Motors Test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
   <style>
     :root {
       color-scheme: dark;
@@ -314,6 +315,9 @@ HTML_PAGE = r"""<!doctype html>
       gap: 10px;
       max-width: 330px;
       margin: 0 auto;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
     button {
       appearance: none;
@@ -455,37 +459,74 @@ HTML_PAGE = r"""<!doctype html>
       post("/api/drive", payload);
     }
 
+    /* --- touch / pointer controls --- */
     document.querySelectorAll("[data-drive]").forEach(btn => {
-      btn.addEventListener("pointerdown", () => drive(btn.dataset.drive));
-      btn.addEventListener("pointerup", () => post("/api/stop"));
-      btn.addEventListener("pointerleave", () => post("/api/stop"));
+      btn.addEventListener("pointerdown", (e) => { e.preventDefault(); drive(btn.dataset.drive); });
+      btn.addEventListener("pointerup",     () => post("/api/stop"));
+      btn.addEventListener("pointerleave",  () => post("/api/stop"));
+      btn.addEventListener("pointercancel", () => post("/api/stop"));
+      btn.addEventListener("contextmenu",   (e) => e.preventDefault());
     });
-    document.querySelector("#stop").onclick = () => post("/api/stop");
+
+    /* --- keyboard arrow controls --- */
+    const keyMap = {ArrowUp:"fwd", ArrowDown:"back", ArrowLeft:"left", ArrowRight:"right"};
+    const keysDown = new Set();
+    document.addEventListener("keydown", (e) => {
+      if (!keyMap[e.key] || keysDown.has(e.key)) return;
+      keysDown.add(e.key);
+      drive(keyMap[e.key]);
+    });
+    document.addEventListener("keyup", (e) => {
+      if (!keyMap[e.key]) return;
+      keysDown.delete(e.key);
+      if (keysDown.size === 0) post("/api/stop");
+    });
+
+    document.querySelector("#stop").onclick   = () => post("/api/stop");
     document.querySelector("#return").onclick = () => post("/api/return");
-    document.querySelector("#reset").onclick = () => post("/api/reset_odom");
-    document.querySelector("#arm").onclick = () => post("/api/arm", {
+    document.querySelector("#reset").onclick  = () => post("/api/reset_odom");
+    document.querySelector("#arm").onclick    = () => post("/api/arm", {
       steps: Number(document.querySelector("#armSteps").value),
       speed: Number(document.querySelector("#armSpeed").value)
     });
     speed.oninput = () => speedValue.textContent = speed.value;
     steer.oninput = () => steerValue.textContent = steer.value;
 
+    /* --- safe getter: prevents crash when telemetry/obstacles is empty --- */
+    function get(obj, key, fallback) {
+      if (obj && obj[key] !== undefined && obj[key] !== null) return obj[key];
+      return fallback;
+    }
+
     async function refresh() {
       try {
         const res = await fetch("/api/status");
         const data = await res.json();
+        const tel = data.telemetry || {};
+        const obs = data.obstacles || {};
+
         document.querySelector("#dot").classList.toggle("on", data.connected);
         document.querySelector("#conn").textContent = data.connected ? `Connected ${data.port}` : "Disconnected";
-        document.querySelector("#bat").textContent = data.telemetry.BAT ?? "--";
-        document.querySelector("#spd").textContent = data.telemetry.SPD ?? "--";
-        document.querySelector("#dist").textContent = data.telemetry.DIST ?? "--";
-        document.querySelector("#fl").textContent = data.obstacles.FL ?? "--";
-        document.querySelector("#front").textContent = data.obstacles.F ?? "--";
-        document.querySelector("#fr").textContent = data.obstacles.FR ?? "--";
-        document.querySelector("#log").textContent = data.log.join("\n");
-      } catch (err) {}
+
+        document.querySelector("#bat").textContent   = get(tel, "BAT", "--");
+        document.querySelector("#spd").textContent   = get(tel, "SPD", "--");
+        document.querySelector("#dist").textContent  = get(tel, "DIST", "--");
+        document.querySelector("#fl").textContent    = get(obs, "FL", "--");
+        document.querySelector("#front").textContent = get(obs, "F", "--");
+        document.querySelector("#fr").textContent    = get(obs, "FR", "--");
+
+        document.querySelector("#log").textContent = (data.log || []).join("\n");
+
+        /* sync slider max with server config */
+        if (data.max_speed) {
+          speed.max = data.max_speed;
+          steer.max = data.max_steer || data.max_speed;
+        }
+      } catch (err) {
+        /* network glitch — will retry automatically */
+      }
     }
-    setInterval(refresh, 300);
+    setInterval(refresh, 400);
     refresh();
   </script>
 </body>
