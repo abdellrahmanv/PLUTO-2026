@@ -38,6 +38,10 @@ Before implementation, each subsystem must have:
 - Test method.
 - Debug evidence.
 
+Bootstrap is treated as a subsystem. Any new dependency, service, hardware
+device, or operating-system assumption must include setup, detection, recovery,
+and diagnostic requirements in `SYSTEM_REQUIREMENTS.md`.
+
 ## Current Architecture Summary
 
 ### Raspberry Pi
@@ -399,3 +403,6 @@ A feature is done only when:
 - It has a debug log or telemetry path.
 - It fails safe.
 - It is documented.
+
+A Raspberry Pi feature is done only when bootstrap can install or validate its
+dependencies and can clearly report missing hardware or failed services.

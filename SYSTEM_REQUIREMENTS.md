@@ -19,6 +19,8 @@ Use stable IDs:
 SYS-xxx        System-level requirement
 IF-xxx         Interface requirement
 SAFE-xxx       Safety requirement
+BOOT-xxx       Bootstrap/setup requirement
+HW-xxx         Hardware detection requirement
 STATE-x        Robot state
 STATE-x.y      State requirement
 STATE-x.y.z    State subrequirement
@@ -49,6 +51,8 @@ Every requirement should have:
 | SYS-006 | Pluto shall implement one active mode/state at a time. | Pi | Mode manager test |
 | SYS-007 | Pluto shall support emergency stop from any state. | Pi + STM32 | E-stop test |
 | SYS-008 | Pluto shall be testable one subsystem at a time before full integration. | All | Verification checklist |
+| SYS-009 | Pluto shall provide an automatic Raspberry Pi setup path that installs, configures, validates, and reports the system state. | Pi | Bootstrap verification |
+| SYS-010 | Pluto shall provide actionable diagnostics when automatic setup cannot recover a required subsystem. | Pi | Fault injection |
 
 ## Safety Requirements
 
@@ -89,6 +93,58 @@ Every requirement should have:
 | PWR-006 | Pi shall not enter WELCOME, DANCE, or MANUAL if battery status is critical. | Pi | Mode transition test |
 | PWR-007 | Power thresholds shall be configurable and documented before field testing. | Project | Config review |
 
+## Bootstrap And Self-Setup Requirements
+
+Auto setup is a hard requirement. The Raspberry Pi side shall be able to prepare
+itself for operation from a fresh clone or partially broken local environment.
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| BOOT-001 | Pi shall provide one primary setup command for installing and validating Pluto software. | Pi | Fresh install test |
+| BOOT-002 | Setup shall be idempotent; running it multiple times shall not damage an already working install. | Pi | Repeat setup test |
+| BOOT-003 | Setup shall detect the operating system, Python version, and required package manager availability. | Pi | Environment probe |
+| BOOT-004 | Setup shall create or repair the Python virtual environment. | Pi | Venv test |
+| BOOT-005 | Setup shall install or repair required Python dependencies. | Pi | Import test |
+| BOOT-006 | Setup shall install or repair required Linux packages when permitted. | Pi | Package test |
+| BOOT-007 | Setup shall configure the Pi user for serial device access. | Pi | Group membership test |
+| BOOT-008 | Setup shall create or repair required system services only after their commands pass validation. | Pi | Service validation test |
+| BOOT-009 | Setup shall not hide failures; every failed step shall report command, reason, and suggested next action. | Pi | Fault injection |
+| BOOT-010 | Setup shall produce a final pass/fail report with detected hardware and missing hardware. | Pi | Report review |
+| BOOT-011 | Setup shall support an offline mode that validates already-installed dependencies without requiring internet. | Pi | Offline test |
+| BOOT-012 | Setup shall write logs to a predictable local path. | Pi | Log file check |
+| BOOT-013 | Setup shall never enable autonomous motion as part of installation. | Pi + STM32 | Safety review |
+| BOOT-014 | Setup shall send `CMD:STOP` after connecting to STM32 during validation. | Pi + STM32 | Serial log |
+| BOOT-015 | Setup shall distinguish between optional and required hardware. | Pi | Hardware report |
+
+## Hardware Detection Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| HW-001 | Pi shall scan serial ports and identify STM32 by `ID:STM32_MOTOR`, `ACK:PING`, `TEL:`, or `OBS:`. | Pi | Serial probe |
+| HW-002 | Pi shall scan serial ports and identify Uno by `ID:UNO_LCD`. | Pi | Serial probe |
+| HW-003 | Pi shall not assume `/dev/ttyACM0` is always STM32. | Pi | Multi-device test |
+| HW-004 | Pi shall detect USB camera availability when camera features are enabled. | Pi | Camera probe |
+| HW-005 | Pi shall detect audio output availability when speech/dance audio is enabled. | Pi | Audio probe |
+| HW-006 | Pi shall detect microphone availability when speech recognition is enabled. | Pi | Microphone probe |
+| HW-007 | Pi shall classify STM32 as required for motion states. | Pi | Hardware report |
+| HW-008 | Pi shall classify Uno as required for face/LCD output but not for motor safety. | Pi | Hardware report |
+| HW-009 | Pi shall classify camera, microphone, and speaker as feature-dependent hardware. | Pi | Hardware report |
+| HW-010 | Pi shall continue booting into a safe reduced state if optional hardware is missing. | Pi | Missing optional test |
+| HW-011 | Pi shall refuse motion states if STM32 is missing or unidentified. | Pi | Missing STM32 test |
+| HW-012 | Pi shall produce a clear hardware fault reason when required hardware is missing. | Pi | Fault report |
+
+## Self-Recovery Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| REC-001 | Pi shall retry STM32 serial detection before declaring STM32 unavailable. | Pi | Delayed plug-in test |
+| REC-002 | Pi shall retry Uno serial detection before declaring Uno unavailable. | Pi | Delayed plug-in test |
+| REC-003 | Pi shall restart Pluto user services if they crash. | Pi | Service crash test |
+| REC-004 | Pi shall reconnect to STM32 after USB unplug/replug without reboot when possible. | Pi | Reconnect test |
+| REC-005 | Pi shall keep STM32 in safe stop while recovering connections. | Pi + STM32 | Serial log |
+| REC-006 | Pi shall escalate to ERROR if a required subsystem cannot recover. | Pi | Fault injection |
+| REC-007 | Pi shall include last successful step and failed step in recovery logs. | Pi | Log review |
+
 ## Interface Requirements
 
 ### Pi To STM32
@@ -122,6 +178,7 @@ Every requirement should have:
 
 ```text
 Pluto System
+├── State 0: BOOTSTRAP
 ├── State 1: IDLE
 ├── State 2: MANUAL
 ├── State 3: WELCOME
@@ -130,8 +187,103 @@ Pluto System
 └── State 6: GAME_LATER
 ```
 
-Only State 1 is decomposed in this baseline. Other states will be decomposed
-before implementation.
+BOOTSTRAP is the required setup and self-test state before normal operation.
+
+## STATE-0: BOOTSTRAP
+
+Intent:
+
+```text
+Pluto prepares and validates the Raspberry Pi runtime, detects required
+hardware, repairs what it can, and reports exactly what is wrong if it cannot
+continue.
+```
+
+BOOTSTRAP is not a user-facing personality mode. It is the engineering state
+that makes the rest of the robot reliable.
+
+### State Entry Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.1 | BOOTSTRAP shall run on first setup and may run at every Pi boot. | Pi | Boot log |
+| STATE-0.2 | BOOTSTRAP shall start with all motion intent set to zero. | Pi | State log |
+| STATE-0.3 | BOOTSTRAP shall not enter motion states directly. | Pi | Transition test |
+| STATE-0.4 | BOOTSTRAP shall record start time, software version, and git commit when available. | Pi | Bootstrap report |
+
+### Setup Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.10 | BOOTSTRAP shall verify Python runtime and virtual environment. | Pi | Environment report |
+| STATE-0.11 | BOOTSTRAP shall install or repair dependencies when internet/package access is available. | Pi | Dependency test |
+| STATE-0.12 | BOOTSTRAP shall skip destructive reinstall if the environment is already valid. | Pi | Repeat setup test |
+| STATE-0.13 | BOOTSTRAP shall configure serial permissions for the active Pi user. | Pi | Group membership test |
+| STATE-0.14 | BOOTSTRAP shall validate service definitions before enabling them. | Pi | Service validation |
+| STATE-0.15 | BOOTSTRAP shall support a diagnostic-only mode that changes nothing. | Pi | Dry-run test |
+
+### Hardware Detection Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.20 | BOOTSTRAP shall probe serial ports for STM32 identity. | Pi | `ID:STM32_MOTOR` log |
+| STATE-0.21 | BOOTSTRAP shall probe serial ports for Uno identity. | Pi | `ID:UNO_LCD` log |
+| STATE-0.22 | BOOTSTRAP shall probe camera if any enabled state depends on vision. | Pi | Camera probe |
+| STATE-0.23 | BOOTSTRAP shall probe speaker if any enabled state depends on audio output. | Pi | Audio probe |
+| STATE-0.24 | BOOTSTRAP shall probe microphone if any enabled state depends on speech input. | Pi | Microphone probe |
+| STATE-0.25 | BOOTSTRAP shall classify hardware as required, optional, or unavailable. | Pi | Hardware report |
+
+### Self-Repair Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.30 | BOOTSTRAP shall retry transient failures before marking hardware unavailable. | Pi | Retry log |
+| STATE-0.31 | BOOTSTRAP shall attempt to repair missing Python dependencies. | Pi | Dependency repair test |
+| STATE-0.32 | BOOTSTRAP shall attempt to restart failed Pluto services. | Pi | Service crash test |
+| STATE-0.33 | BOOTSTRAP shall attempt to reconnect serial devices after delayed enumeration. | Pi | Delayed USB test |
+| STATE-0.34 | BOOTSTRAP shall not attempt repair actions that can move motors. | Pi + STM32 | Safety review |
+
+### Safety Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.40 | If STM32 is detected, BOOTSTRAP shall send `CMD:STOP`. | Pi + STM32 | `ACK:STOP` |
+| STATE-0.41 | BOOTSTRAP shall refuse MANUAL, WELCOME, or DANCE if STM32 is missing. | Pi | Transition test |
+| STATE-0.42 | BOOTSTRAP shall refuse motion states if battery status is critical. | Pi | Battery test |
+| STATE-0.43 | BOOTSTRAP shall enter ERROR if required hardware cannot be validated. | Pi | Fault test |
+| STATE-0.44 | BOOTSTRAP may enter IDLE with reduced capability if only optional hardware is missing. | Pi | Optional missing test |
+
+### Reporting Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.50 | BOOTSTRAP shall produce a human-readable report. | Pi | Report review |
+| STATE-0.51 | Report shall include pass/fail for STM32, Uno, camera, microphone, speaker, Python dependencies, and services. | Pi | Report review |
+| STATE-0.52 | Report shall include exact failed command or probe when a check fails. | Pi | Fault injection |
+| STATE-0.53 | Report shall include suggested next action for each failed required check. | Pi | Fault injection |
+| STATE-0.54 | Report shall be available in logs and through the operator interface when available. | Pi | Log/UI test |
+
+### Exit Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-0.60 | BOOTSTRAP shall exit to IDLE when required checks pass. | Pi | Boot flow test |
+| STATE-0.61 | BOOTSTRAP shall exit to ERROR when required checks fail after recovery attempts. | Pi | Fault flow test |
+| STATE-0.62 | BOOTSTRAP shall not exit to MANUAL, WELCOME, or DANCE directly. | Pi | Transition test |
+
+## STATE-0 Verification Plan
+
+| ID | Test | Expected Evidence |
+| --- | --- | --- |
+| VER-BOOT-001 | Run setup on fresh Pi clone. | dependencies installed, report PASS/FAIL |
+| VER-BOOT-002 | Run setup twice. | second run succeeds without damaging install |
+| VER-BOOT-003 | Boot with STM32 connected. | STM32 identified, `CMD:STOP`, IDLE allowed |
+| VER-BOOT-004 | Boot without STM32. | clear missing STM32 fault, motion states blocked |
+| VER-BOOT-005 | Boot without Uno. | reduced capability or warning, STM32 heartbeat still possible |
+| VER-BOOT-006 | Boot without camera. | vision features disabled or warning reported |
+| VER-BOOT-007 | Break a service definition. | setup reports service validation failure |
+| VER-BOOT-008 | Remove Python dependency. | setup repairs dependency or reports package failure |
+| VER-BOOT-009 | Run diagnostic-only mode. | no changes made, full report produced |
 
 ## STATE-1: IDLE
 
@@ -589,11 +741,14 @@ GAME_LATER is not implemented in v1.
 | TRANS-005 | WELCOME_RETURN shall block all non-error transitions until complete. | Pi | Return test |
 | TRANS-006 | GAME_LATER shall not be reachable in v1. | Pi | Mode list test |
 | TRANS-007 | Motion states shall be blocked if battery status is critical. | Pi | Battery transition test |
+| TRANS-008 | Normal runtime shall begin with BOOTSTRAP before IDLE. | Pi | Boot flow test |
+| TRANS-009 | BOOTSTRAP shall be the only state allowed to perform setup/repair actions. | Pi | State audit |
 
 ## Requirement-To-Interface Trace
 
 | State | STM32 Commands | STM32 Inputs | Uno Commands | Other Inputs |
 | --- | --- | --- | --- | --- |
+| BOOTSTRAP | `CMD:PING`, `CMD:STOP` | `ID`, `ACK`, `TEL`, `OBS`, `ALERT` | `ID?` or probe, optional `MODE:BOOT` | OS packages, Python env, serial devices, camera, audio |
 | IDLE | `CMD:PING`, `CMD:STOP` | `ID`, `TEL`, `OBS`, `ALERT` | `MODE:IDLE`, `FACE:IDLE` | optional low-rate camera |
 | MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | operator controls |
 | WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN`, `CMD:RESET_HOME` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | vision/speech/crowd target |
@@ -627,6 +782,43 @@ GAME_LATER is not implemented in v1.
 | PWR-006 | TRANS-007 | battery transition test |
 | PWR-007 | Implementation Gate | config review |
 
+## Bootstrap-To-Test Trace
+
+| Bootstrap ID | Related Requirements | Verification |
+| --- | --- | --- |
+| BOOT-001 | SYS-009, STATE-0.1 | `VER-BOOT-001` |
+| BOOT-002 | STATE-0.12 | `VER-BOOT-002` |
+| BOOT-003 | STATE-0.10 | environment probe |
+| BOOT-004 | STATE-0.10, STATE-0.31 | venv test |
+| BOOT-005 | STATE-0.11, STATE-0.31 | import test |
+| BOOT-006 | STATE-0.11 | package test |
+| BOOT-007 | STATE-0.13 | serial permission test |
+| BOOT-008 | STATE-0.14, STATE-0.32 | service validation test |
+| BOOT-009 | STATE-0.52, STATE-0.53 | fault injection |
+| BOOT-010 | STATE-0.50, STATE-0.51 | report review |
+| BOOT-011 | STATE-0.15 | offline/diagnostic test |
+| BOOT-012 | STATE-0.54 | log file check |
+| BOOT-013 | STATE-0.34, STATE-0.40 | safety review |
+| BOOT-014 | STATE-0.40 | STM32 serial log |
+| BOOT-015 | STATE-0.25 | hardware report |
+
+## Hardware-To-Test Trace
+
+| Hardware ID | Related Requirements | Verification |
+| --- | --- | --- |
+| HW-001 | STATE-0.20, IF-STM32-001 | STM32 probe test |
+| HW-002 | STATE-0.21, IF-UNO-001 | Uno probe test |
+| HW-003 | STATE-0.20 | multi-device serial test |
+| HW-004 | STATE-0.22 | camera probe |
+| HW-005 | STATE-0.23 | speaker probe |
+| HW-006 | STATE-0.24 | microphone probe |
+| HW-007 | STATE-0.41 | missing STM32 test |
+| HW-008 | STATE-0.44 | missing Uno test |
+| HW-009 | STATE-0.44 | optional hardware test |
+| HW-010 | STATE-0.44 | reduced capability test |
+| HW-011 | STATE-0.41 | motion block test |
+| HW-012 | STATE-0.52, STATE-0.53 | fault report review |
+
 ## Implementation Gate
 
 Before code for a state begins:
@@ -636,6 +828,7 @@ Before code for a state begins:
 3. Verification tests must exist.
 4. Safety behavior must be explicit.
 5. Any mismatch between docs, firmware, and wiring must be resolved.
+6. Bootstrap impact must be defined for any new dependency or hardware device.
 
 The next code implementation should start with the validation tools required to
 prove `IF-STM32-*` and `IF-UNO-*`, not with high-level behavior.
