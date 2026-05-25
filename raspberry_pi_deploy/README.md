@@ -128,3 +128,39 @@ sudo systemctl status pluto-motors-test
 First tests must be done with the hoverboard wheels lifted off the ground.
 
 The web app sends heartbeat pings. If the Pi dies or the app stops, the STM32 should stop the motors after its timeout.
+
+## Website Opens But Motors Do Not Move
+
+The page must show an STM32 connection in the log:
+
+```text
+CONNECTED_STM32:/dev/ttyACM0
+```
+
+If it shows disconnected:
+
+```bash
+ls -l /dev/ttyACM* /dev/ttyUSB*
+sudo systemctl restart pluto-system
+sudo journalctl -u pluto-system -n 120 --no-pager
+```
+
+If the Uno is also connected, this app now probes serial devices and only accepts
+the STM32 motor controller. The STM32 firmware must send one of these:
+
+```text
+ID:STM32_MOTOR
+TEL:...
+OBS:...
+ACK:PING
+```
+
+First movement test:
+
+- Lift the hoverboard wheels off the ground.
+- Hold `BACK` for 2 seconds.
+- Hold `LEFT` for 2 seconds.
+- Hold `RIGHT` for 2 seconds.
+
+If turning works but forward does not, the ultrasonic safety layer is blocking
+forward movement.

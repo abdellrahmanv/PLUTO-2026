@@ -14,6 +14,7 @@ APP_HOST = os.getenv("PLUTO_WEB_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PLUTO_WEB_PORT", "8080"))
 SERIAL_BAUD = int(os.getenv("PLUTO_STM32_BAUD", "115200"))
 SERIAL_PORT = os.getenv("PLUTO_STM32_PORT", "")
+SERIAL_PROBE_TIMEOUT_S = float(os.getenv("PLUTO_SERIAL_PROBE_TIMEOUT", "2.0"))
 
 MAX_SPEED = int(os.getenv("PLUTO_MAX_SPEED", "250"))
 MAX_STEER = int(os.getenv("PLUTO_MAX_STEER", "250"))
@@ -108,25 +109,57 @@ class STM32Bridge:
 
     def _connect(self):
         ports = [SERIAL_PORT] if SERIAL_PORT else self._candidate_ports()
+        if not ports:
+            self._set_error("No serial ports found. Plug STM32 USB into Raspberry Pi.")
+
         for port in ports:
             if not port:
                 continue
             try:
                 ser = serial.Serial(port, SERIAL_BAUD, timeout=0.05, write_timeout=0.2)
-                with self.lock:
-                    self.ser = ser
-                    self.state.connected = True
-                    self.state.port = port
-                    self.state.last_error = ""
-                self._log(f"CONNECTED:{port}")
-                self.send("CMD:PING")
-                return
+                if SERIAL_PORT or self._probe_stm32(ser, port):
+                    with self.lock:
+                        self.ser = ser
+                        self.state.connected = True
+                        self.state.port = port
+                        self.state.last_error = ""
+                    self._log(f"CONNECTED_STM32:{port}")
+                    self.send("CMD:PING")
+                    return
+                ser.close()
             except serial.SerialException as exc:
                 self._set_error(f"{port}: {exc}")
 
         with self.lock:
             self.state.connected = False
             self.state.port = ""
+
+    def _probe_stm32(self, ser, port: str):
+        self._log(f"PROBE:{port}")
+        deadline = time.time() + SERIAL_PROBE_TIMEOUT_S
+        try:
+            ser.reset_input_buffer()
+            ser.write(b"CMD:PING\n")
+            ser.flush()
+            while time.time() < deadline:
+                raw = ser.readline()
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", errors="replace").strip()
+                self._log(f"PROBE_RX:{port}:{line}")
+                if (
+                    "ID:STM32_MOTOR" in line
+                    or line.startswith("TEL:")
+                    or line.startswith("OBS:")
+                    or line.startswith("ACK:PING")
+                    or line.startswith("ACK:DRIVE")
+                ):
+                    self._handle_line(line)
+                    return True
+        except serial.SerialException as exc:
+            self._set_error(f"{port}: probe failed: {exc}")
+        self._log(f"SKIP_NOT_STM32:{port}")
+        return False
 
     def _candidate_ports(self):
         ports = []
@@ -239,6 +272,16 @@ def api_arm():
     speed = clamp(data.get("speed", 200), 1, 2000)
     ok = bridge.send(f"CMD:ARM:{steps},{speed}")
     return jsonify({"ok": ok, "steps": steps, "speed": speed})
+
+
+@app.post("/api/raw")
+def api_raw():
+    data = request.get_json(force=True, silent=True) or {}
+    command = str(data.get("command", "")).strip()
+    if not command.startswith("CMD:"):
+        return jsonify({"ok": False, "error": "Only CMD: commands are allowed"}), 400
+    ok = bridge.send(command)
+    return jsonify({"ok": ok, "command": command})
 
 
 HTML_PAGE = r"""<!doctype html>
@@ -483,6 +526,7 @@ HTML_PAGE = r"""<!doctype html>
     }
 
     let activeDriveType = null;
+    let driveRepeatTimer = null;
 
     function handleStart(kind, e) {
       if (e) e.preventDefault();
@@ -491,6 +535,9 @@ HTML_PAGE = r"""<!doctype html>
       activeDriveType = kind;
       setButtonActive(kind, true);
       drive(kind);
+      driveRepeatTimer = setInterval(() => {
+        if (activeDriveType) drive(activeDriveType);
+      }, 180);
     }
 
     function handleRelease(e) {
@@ -498,6 +545,10 @@ HTML_PAGE = r"""<!doctype html>
       if (!activeDriveType) return;
       setButtonActive(activeDriveType, false);
       activeDriveType = null;
+      if (driveRepeatTimer) {
+        clearInterval(driveRepeatTimer);
+        driveRepeatTimer = null;
+      }
       post("/api/stop");
     }
 
@@ -567,6 +618,9 @@ HTML_PAGE = r"""<!doctype html>
 
         document.querySelector("#dot").classList.toggle("on", data.connected);
         document.querySelector("#conn").textContent = data.connected ? `Connected ${data.port}` : "Disconnected";
+        if (!data.connected && data.last_error) {
+          document.querySelector("#conn").textContent = `Disconnected: ${data.last_error}`;
+        }
 
         document.querySelector("#bat").textContent   = get(tel, "BAT", "--");
         document.querySelector("#spd").textContent   = get(tel, "SPD", "--");

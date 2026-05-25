@@ -8,6 +8,8 @@ RUN_USER="${SUDO_USER:-${USER}}"
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip network-manager
 sudo systemctl enable --now NetworkManager
+sudo usermod -aG dialout "${RUN_USER}" || true
+sudo usermod -aG plugdev "${RUN_USER}" || true
 
 cd "$APP_DIR"
 python3 -m venv .venv
@@ -37,6 +39,8 @@ EOF
 sudo systemctl daemon-reload
 
 echo "Installed ${SERVICE_NAME}."
+echo "Serial permissions set for user: ${RUN_USER}"
+echo "If this was the first install, reboot once so group permissions apply."
 echo "Run now:     ./run.sh"
 echo "Enable boot: sudo systemctl enable ${SERVICE_NAME}"
 echo "Start boot:  sudo systemctl start ${SERVICE_NAME}"

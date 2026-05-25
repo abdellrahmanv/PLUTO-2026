@@ -19,6 +19,8 @@ sudo systemctl daemon-reload
 
 echo "Installing fixed Pluto boot system..."
 "${APP_DIR}/auto_system.sh"
+sudo usermod -aG dialout "${USER}" || true
+sudo usermod -aG plugdev "${USER}" || true
 
 sleep 3
 
@@ -42,4 +44,3 @@ echo "Open from your phone/laptop:"
 echo "  WiFi: Pluto-Motors"
 echo "  Pass: pluto1234"
 echo "  Site: http://192.168.4.1:8080"
-
