@@ -6,6 +6,8 @@ Last updated: YYYY-MM-DD
 
 Last validated: not yet validated on hardware
 
+Owner: unassigned
+
 ## Requirement Trace
 
 Implemented requirements:
@@ -44,6 +46,14 @@ External dependencies:
 
 - item
 
+## Configuration
+
+Configuration values, defaults, limits, and files:
+
+| Name | Default | Allowed Range | Reason |
+| --- | --- | --- | --- |
+| example_setting | value | range | why |
+
 ## Runtime Behavior
 
 Describe how the feature behaves during normal operation.
@@ -78,6 +88,12 @@ Logs, telemetry, UI state, or hardware behavior that proves the feature works:
 expected output here
 ```
 
+## Verification Tests
+
+| Test ID | Method | Expected Result | Last Result |
+| --- | --- | --- | --- |
+| VER-XXX-001 | describe method | expected evidence | not run |
+
 ## Failure Modes
 
 | Failure | Likely Cause | Diagnostic | Recovery |
@@ -92,3 +108,8 @@ Describe how this feature fails safe.
 
 - Question or risk here.
 
+## Change History
+
+| Date | Change | Reason |
+| --- | --- | --- |
+| YYYY-MM-DD | Initial draft | New feature memory |

@@ -23,9 +23,13 @@ BOOT-xxx       Bootstrap/setup requirement
 HW-xxx         Hardware detection requirement
 WEB-xxx        Operator website requirement
 MEM-xxx        Feature memory and design record requirement
+AUD-xxx        Audio and speech requirement
+ARM-xxx        Stepper arm requirement
+VNV-xxx        Verification and validation coverage requirement
 STATE-x        Robot state
 STATE-x.y      State requirement
 STATE-x.y.z    State subrequirement
+STATE-xR.y     Locked return/recovery substate requirement when needed
 VER-x          Verification item
 ```
 
@@ -57,6 +61,8 @@ Every requirement should have:
 | SYS-010 | Pluto shall provide actionable diagnostics when automatic setup cannot recover a required subsystem. | Pi | Fault injection |
 | SYS-011 | Pluto shall provide an operator website identified as project `PLUTO`. | Pi | Website test |
 | SYS-012 | Pluto shall keep a feature memory record for every implemented requirement or feature. | Project | Memory record review |
+| SYS-013 | Pluto shall treat audio/speech as a measurable subsystem with noise, latency, and fallback requirements. | Pi | Audio verification |
+| SYS-014 | Pluto shall treat the NEMA stepper arm as a bounded actuator with explicit safety limits. | Pi + STM32 | Arm verification |
 
 ## Safety Requirements
 
@@ -201,6 +207,45 @@ STM32 safety layer.
 | WEB-SAFE-003 | Website shall not allow MANUAL, WELCOME, or DANCE if battery status is critical. | Pi | Battery gate test |
 | WEB-SAFE-004 | Website shall not allow new mode selection during WELCOME_RETURN except emergency stop. | Pi | Return gate test |
 
+## Audio And Speech Requirements
+
+Audio and speech are environmental subsystems. They must be validated against
+robot noise, motor vibration, speaker feedback, and room noise.
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| AUD-001 | Pi shall detect microphone availability before enabling speech states. | Pi | Microphone probe |
+| AUD-002 | Pi shall detect speaker/audio output availability before enabling speech or DANCE audio. | Pi | Audio probe |
+| AUD-003 | Speech features shall have a configurable minimum microphone signal quality threshold. | Pi | Audio quality test |
+| AUD-004 | Speech features shall report low confidence or low signal quality instead of guessing. | Pi | Noisy-room test |
+| AUD-005 | Speech features shall tolerate hoverboard/arm motor noise by pausing motion, filtering audio, or falling back to text/simple prompt. | Pi | Motor-noise test |
+| AUD-006 | Pluto shall not start WELCOME_TALK if microphone is unavailable unless a text/manual fallback is enabled. | Pi | Missing mic test |
+| AUD-007 | Pluto shall not start DANCE audio if speaker is unavailable; DANCE shall be blocked or run silent only if explicitly allowed. | Pi | Missing speaker test |
+| AUD-008 | TTS/speaker volume shall be configurable. | Pi | Config review |
+| AUD-009 | TTS/speaker output should be understandable at the expected interaction distance. | Pi | Listening test |
+| AUD-010 | Speech recognition shall log confidence, recognized text, and selected response path. | Pi | Speech log review |
+| AUD-011 | If microphone captures robot motor noise above configured threshold, Pi shall reduce motion, pause listening, or warn operator. | Pi | Motor-noise test |
+| AUD-012 | Audio failure shall not affect STM32 heartbeat or motor safety. | Pi + STM32 | Audio fault test |
+
+## Stepper Arm Requirements
+
+The NEMA/stepper arm is an actuator. It must be bounded, observable, and safe.
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| ARM-001 | Stepper arm commands shall use bounded `CMD:ARM:<steps>,<speed>` values. | Pi + STM32 | Command bounds test |
+| ARM-002 | Pi shall not send arm commands until STM32 identity is verified. | Pi | Serial probe test |
+| ARM-003 | Arm step count limits shall be configurable before hardware tests. | Pi | Config review |
+| ARM-004 | Arm speed limits shall be configurable before hardware tests. | Pi | Config review |
+| ARM-005 | Arm movement shall be disabled by default during BOOTSTRAP and IDLE. | Pi + STM32 | State log |
+| ARM-006 | Arm movement in WELCOME shall be slow and gesture-like only. | Pi + STM32 | Command log |
+| ARM-007 | Arm movement in DANCE shall stay within a configured safe range. | Pi + STM32 | Command bounds test |
+| ARM-008 | Arm movement shall stop on emergency stop, STM32 timeout, or critical alert. | STM32 | Fault test |
+| ARM-009 | If physical limit switches are not installed, software limits shall be conservative and documented. | Project | Design review |
+| ARM-010 | If physical limit switches are installed later, STM32 shall treat them as safety inputs. | STM32 | Limit switch test |
+| ARM-011 | Pi shall not command arm movement while WELCOME_RETURN is active unless explicitly required for safe posture. | Pi | Return test |
+| ARM-012 | Arm failures shall not block wheel stop commands. | STM32 | Fault injection |
+
 ## Feature Memory Requirements
 
 Every implemented feature shall leave behind a design and debug memory record.
@@ -229,6 +274,66 @@ feature_memory/
 | MEM-012 | Memory files shall be written in plain Markdown and kept in the repository. | Project | Repo review |
 | MEM-013 | Memory files shall include a "Last validated" field when hardware tests are performed. | Project | Test record review |
 | MEM-014 | Memory files shall include unresolved questions or open risks when the design is incomplete. | Project | Risk review |
+
+### Feature Memory Record Format
+
+Every feature memory file shall use this structure:
+
+```text
+# Feature Memory: <Feature Name>
+
+Status:
+Last updated:
+Last validated:
+Owner:
+
+## Requirement Trace
+## Design Intent
+## Design Decision
+## Interfaces
+## Runtime Behavior
+## Configuration
+## How To Run
+## How To Debug
+## Expected Evidence
+## Verification Tests
+## Failure Modes
+## Safety Notes
+## Open Questions
+## Change History
+```
+
+Required fields:
+
+| Field | Requirement |
+| --- | --- |
+| Status | `draft`, `implemented`, `validated`, or `deprecated` |
+| Last updated | date of latest design/code update |
+| Last validated | date and hardware context of latest validation, or `not yet validated on hardware` |
+| Owner | person/team responsible for maintaining the feature |
+| Requirement Trace | exact `SYS`, `SAFE`, `IF`, `STATE`, `WEB`, `BOOT`, `HW`, `AUD`, `ARM`, or `MEM` IDs |
+| Design Decision | chosen approach and rejected alternatives |
+| Interfaces | commands, messages, files, hardware, services, APIs, and dependencies |
+| How To Debug | ordered debug checklist and useful commands |
+| Expected Evidence | logs, telemetry, UI state, or hardware behavior proving success |
+| Verification Tests | linked `VER-*` tests and pass/fail evidence |
+| Failure Modes | failure, likely cause, diagnostic, and recovery |
+| Safety Notes | how the feature fails safe |
+| Change History | dated list of design/code changes |
+
+## Verification Coverage Requirements
+
+Requirements must stay testable. Growth without verification is not acceptable.
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| VNV-001 | Every `shall` requirement shall have a verification method. | Project | Requirements review |
+| VNV-002 | Every implemented requirement shall be linked to at least one verification test, review, inspection, or analysis method. | Project | Trace review |
+| VNV-003 | Every safety requirement shall have an executable or inspectable verification path before field testing. | Project | Safety review |
+| VNV-004 | Every state shall have a verification plan before implementation. | Project | State review |
+| VNV-005 | Every requirement category added to this document shall have a trace section or explicit verification strategy. | Project | Requirements review |
+| VNV-006 | Verification results from hardware tests shall be recorded in feature memory. | Project | Memory review |
+| VNV-007 | Requirements that cannot yet be verified shall be marked as open risk in the related feature memory. | Project | Risk review |
 
 ## Interface Requirements
 
@@ -608,6 +713,12 @@ WELCOME_DONE
 | STATE-3.18 | Target selection should prefer closest confirmed waver when multiple people wave. | Pi | Scenario test |
 | STATE-3.19 | Once selected, the active target shall remain locked for at least 10 seconds unless lost or emergency stop occurs. | Pi | Attention lock test |
 | STATE-3.19.1 | Pluto may acknowledge crowd presence through face/text without changing active target. | Pi + Uno | Crowd UI test |
+| STATE-3.19.2 | Pi shall estimate crowd size when vision is available. | Pi | Crowd perception test |
+| STATE-3.19.3 | Pi shall distinguish active target from background people when confidence allows. | Pi | Crowd perception test |
+| STATE-3.19.4 | Pi shall record target selection score inputs for debugging. | Pi | Debug log review |
+| STATE-3.19.5 | Pi shall not switch target only because another person briefly appears closer. | Pi | Attention stability test |
+| STATE-3.19.6 | Crowd energy may influence face/text/dance intensity, but shall not bypass safety gates. | Pi + Uno | Crowd energy test |
+| STATE-3.19.7 | If crowd perception is unavailable, WELCOME shall fall back to operator-triggered or single-target behavior. | Pi | Missing vision test |
 
 ### Approach Requirements
 
@@ -636,6 +747,9 @@ WELCOME_DONE
 | STATE-3.33 | Pluto shall answer simple questions with fast local responses in v1. | Pi | Response latency test |
 | STATE-3.34 | Pluto may use LLM fallback only if enabled and latency is acceptable. | Pi | Config test |
 | STATE-3.35 | During TALK, wheel commands shall remain zero. | Pi + STM32 | Serial log |
+| STATE-3.36 | WELCOME_TALK shall verify audio input/output availability or use configured fallback. | Pi | Audio probe |
+| STATE-3.37 | WELCOME_TALK shall log recognized text, confidence, response source, and response latency. | Pi | Speech log review |
+| STATE-3.38 | WELCOME gestures using the arm shall remain within WELCOME arm limits. | Pi + STM32 | Arm command log |
 
 ### Return Requirements
 
@@ -661,6 +775,24 @@ WELCOME_DONE
 | STATE-3.42.3 | Return completion shall require both low commanded speed and position within threshold. | Pi + STM32 | Return log |
 | STATE-3.42.4 | Return shall be considered degraded if odometry is unavailable or invalid. | Pi | Fault injection |
 | STATE-3.42.5 | Degraded return shall stop Pluto and request operator assistance instead of guessing. | Pi + Uno | Fault behavior test |
+| STATE-3.42.6 | Return arrival threshold shall be configured before testing and shall start no smaller than 15 cm. | Pi + STM32 | Config review |
+| STATE-3.42.7 | Return shall tolerate bounded odometry drift and report estimated drift when available. | Pi + STM32 | Drift test |
+| STATE-3.42.8 | Return shall stop if estimated heading error cannot be reduced within configured time. | Pi + STM32 | Heading fault test |
+| STATE-3.42.9 | Return shall not declare success while commanded wheel speed is nonzero. | Pi + STM32 | Return log |
+| STATE-3.42.10 | Return shall log start pose, target/base pose, final pose, duration, and completion reason. | Pi + STM32 | Return log review |
+
+### WELCOME_RETURN Standalone Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-3R.1 | WELCOME_RETURN shall be treated as a locked substate of WELCOME. | Pi | Substate log |
+| STATE-3R.2 | WELCOME_RETURN shall block IDLE, MANUAL, DANCE, WELCOME, and GAME_LATER requests until complete. | Pi | Transition test |
+| STATE-3R.3 | WELCOME_RETURN shall allow emergency stop and ERROR transition. | Pi | E-stop test |
+| STATE-3R.4 | WELCOME_RETURN shall begin only after wheel motion is stopped. | Pi + STM32 | Serial log |
+| STATE-3R.5 | WELCOME_RETURN shall use lower or equal speed limits compared with WELCOME_APPROACH. | Pi | Command bounds |
+| STATE-3R.6 | WELCOME_RETURN shall use obstacle safety at all times. | STM32 | Obstacle test |
+| STATE-3R.7 | WELCOME_RETURN shall enter ERROR if return timeout expires. | Pi | Timeout test |
+| STATE-3R.8 | WELCOME_RETURN shall request operator assistance if odometry is degraded. | Pi + Uno | Fault behavior test |
 
 ### Fault Behavior Requirements
 
@@ -686,6 +818,9 @@ WELCOME_DONE
 | VER-WELCOME-009 | Person moves during approach. | target update or safe stop logged |
 | VER-WELCOME-010 | Return path blocked. | stop behavior, timeout or waiting behavior |
 | VER-WELCOME-011 | Return exceeds duration limit. | ERROR state with return fault reason |
+| VER-WELCOME-012 | WELCOME in multi-person scene. | crowd size, selected target, target lock logged |
+| VER-WELCOME-013 | WELCOME_TALK with motor noise. | low confidence/fallback or motion pause logged |
+| VER-WELCOME-014 | WELCOME arm gesture. | bounded `CMD:ARM`, no wheel movement during talk |
 
 ## STATE-4: DANCE
 
@@ -716,6 +851,8 @@ while never sacrificing obstacle safety.
 | STATE-4.13 | DANCE shall use small forward/backward or sway movements only. | Pi + STM32 | Command bounds |
 | STATE-4.14 | DANCE may move the NEMA arm with bounded stepper commands. | Pi + STM32 | `CMD:ARM` log |
 | STATE-4.15 | DANCE shall continue STM32 heartbeat during audio playback. | Pi | Heartbeat log |
+| STATE-4.16 | DANCE arm movements shall remain inside DANCE arm limits. | Pi + STM32 | Arm bounds test |
+| STATE-4.17 | DANCE shall not command arm movement if arm subsystem is unavailable or unvalidated. | Pi | Hardware gate test |
 
 ### Dance Safety Requirements
 
@@ -726,6 +863,7 @@ while never sacrificing obstacle safety.
 | STATE-4.22 | DANCE shall not use large translation range in v1. | Pi | Command bounds |
 | STATE-4.23 | DANCE shall stop if audio system fails. | Pi | Audio fault test |
 | STATE-4.24 | DANCE shall stop if STM32 reports any critical alert. | Pi | Alert test |
+| STATE-4.25 | DANCE shall stop arm motion before or at the same time as wheel stop on critical fault. | Pi + STM32 | Fault test |
 
 ### Exit Requirements
 
@@ -745,6 +883,8 @@ while never sacrificing obstacle safety.
 | VER-DANCE-003 | Stop dance manually. | audio stops, `CMD:STOP`, IDLE |
 | VER-DANCE-004 | Let song finish. | `CMD:STOP`, IDLE |
 | VER-DANCE-005 | Unplug STM32 during dance. | ERROR state |
+| VER-DANCE-006 | Run DANCE with arm enabled. | bounded arm commands, stop on fault |
+| VER-DANCE-007 | Run DANCE with speaker missing. | DANCE blocked or explicit silent mode |
 
 ## STATE-5: ERROR
 
@@ -838,6 +978,26 @@ GAME_LATER is not implemented in v1.
 | VER-WEB-008 | View bootstrap report from website. | hardware pass/fail and suggested actions visible |
 | VER-WEB-009 | Open website on phone viewport. | controls and status readable without overlap |
 | VER-WEB-010 | Verify manual raw motor routes are unavailable outside MANUAL. | rejected request |
+
+## Audio Verification Plan
+
+| ID | Test | Expected Evidence |
+| --- | --- | --- |
+| VER-AUD-001 | Probe microphone. | available/unavailable reported clearly |
+| VER-AUD-002 | Probe speaker. | available/unavailable reported clearly |
+| VER-AUD-003 | Test speech with hoverboard/arm noise present. | confidence logged; fallback or pause occurs |
+| VER-AUD-004 | Run WELCOME_TALK with microphone missing. | text/manual fallback or mode block |
+| VER-AUD-005 | Run DANCE with speaker missing. | DANCE blocked or explicit silent mode |
+
+## Arm Verification Plan
+
+| ID | Test | Expected Evidence |
+| --- | --- | --- |
+| VER-ARM-001 | Send bounded arm command. | `CMD:ARM`, `ACK:ARM`, movement within configured limit |
+| VER-ARM-002 | Send command above arm step limit. | command rejected or clamped |
+| VER-ARM-003 | Trigger emergency stop during arm movement. | arm movement stops |
+| VER-ARM-004 | Attempt arm movement in IDLE. | blocked unless diagnostic mode enabled |
+| VER-ARM-005 | Attempt DANCE arm movement when arm unavailable. | blocked with clear reason |
 
 ## Cross-State Transition Requirements
 
@@ -977,6 +1137,52 @@ GAME_LATER is not implemented in v1.
 | MEM-012 | repository documentation | repo review |
 | MEM-013 | hardware validation | test record review |
 | MEM-014 | risk tracking | risk review |
+
+## Audio-To-Test Trace
+
+| Audio ID | Related Requirements | Verification |
+| --- | --- | --- |
+| AUD-001 | HW-006, STATE-3.36 | `VER-AUD-001` |
+| AUD-002 | HW-005, STATE-4.3 | `VER-AUD-002` |
+| AUD-003 | STATE-3.37 | audio quality test |
+| AUD-004 | STATE-3.52 | `VER-AUD-003` |
+| AUD-005 | STATE-3.36, STATE-3.37 | `VER-AUD-003` |
+| AUD-006 | STATE-3.36 | `VER-AUD-004` |
+| AUD-007 | STATE-4.23 | `VER-AUD-005` |
+| AUD-008 | configuration | config review |
+| AUD-009 | interaction quality | listening test |
+| AUD-010 | MEM-007 | speech log review |
+| AUD-011 | motor-noise handling | `VER-AUD-003` |
+| AUD-012 | SYS-004 | audio fault test |
+
+## Arm-To-Test Trace
+
+| Arm ID | Related Requirements | Verification |
+| --- | --- | --- |
+| ARM-001 | STATE-4.14, STATE-4.16 | `VER-ARM-001`, `VER-ARM-002` |
+| ARM-002 | IF-STM32-001 | serial probe test |
+| ARM-003 | configuration | config review |
+| ARM-004 | configuration | config review |
+| ARM-005 | STATE-1.41 | `VER-ARM-004` |
+| ARM-006 | STATE-3.38 | `VER-WELCOME-014` |
+| ARM-007 | STATE-4.16 | `VER-DANCE-006` |
+| ARM-008 | STATE-4.25 | `VER-ARM-003` |
+| ARM-009 | MEM-009 | safety review |
+| ARM-010 | future hardware | limit switch test |
+| ARM-011 | STATE-3R.2 | return test |
+| ARM-012 | SAFE-004 | fault injection |
+
+## V&V-Coverage-To-Test Trace
+
+| V&V ID | Related Requirements | Verification |
+| --- | --- | --- |
+| VNV-001 | all `shall` requirements | requirements review |
+| VNV-002 | implementation gate | trace review |
+| VNV-003 | SAFE requirements | safety review |
+| VNV-004 | state requirements | state review |
+| VNV-005 | requirement categories | requirements review |
+| VNV-006 | MEM-013 | memory review |
+| VNV-007 | MEM-014 | risk review |
 
 ## Implementation Gate
 

@@ -17,8 +17,28 @@ Each memory file should answer:
 - What are the known failure modes?
 - What are the safety assumptions?
 - What verification tests prove it?
+- What changed and why?
 
 Use `TEMPLATE.md` for new feature memory files.
+
+Required sections:
+
+```text
+Requirement Trace
+Design Intent
+Design Decision
+Interfaces
+Runtime Behavior
+Configuration
+How To Run
+How To Debug
+Expected Evidence
+Verification Tests
+Failure Modes
+Safety Notes
+Open Questions
+Change History
+```
 
 Suggested filename format:
 
@@ -34,4 +54,3 @@ STATE-1_idle_mode.md
 WEB-002_camera_feed.md
 BOOT-001_auto_setup.md
 ```
-
