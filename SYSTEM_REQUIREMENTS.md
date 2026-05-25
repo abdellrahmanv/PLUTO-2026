@@ -60,6 +60,34 @@ Every requirement should have:
 | SAFE-004 | Pi shall send `CMD:STOP` before entering or leaving motion modes. | Pi | Mode transition log |
 | SAFE-005 | Manual mode shall require deliberate operator input for movement. | Pi | Manual UI test |
 | SAFE-006 | Motors shall first be tested with wheels lifted off the ground. | Human/test process | Test record |
+| SAFE-007 | STM32 shall command zero wheel speed when hoverboard battery is below critical voltage. | STM32 | Low-voltage test |
+| SAFE-008 | Pi shall mark low battery as a safety warning before critical cutoff. | Pi | Battery threshold test |
+
+## Timing Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| TIME-001 | STM32 shall respond to `CMD:PING` within 100 ms when USB CDC is connected and firmware main loop is running. | STM32 | Timing test |
+| TIME-002 | Pi shall send STM32 heartbeat at least every 500 ms while any non-error state is active. | Pi | Serial timing log |
+| TIME-003 | STM32 shall stop wheel commands within 1000 ms if valid Pi heartbeat is absent. | STM32 | Timeout test |
+| TIME-004 | STM32 shall refresh ultrasonic measurements for each installed sensor at least every 250 ms. | STM32 | OBS timing log |
+| TIME-005 | Forward obstacle stop decision shall take effect within 150 ms after an obstacle enters stop threshold, excluding sensor blind spots. | STM32 | Obstacle timing test |
+| TIME-006 | Pi shall process critical `ALERT:` messages within 200 ms of receipt. | Pi | Alert timing test |
+| TIME-007 | Manual drive command latency from operator input to serial write shall be below 150 ms on the Raspberry Pi. | Pi | Manual latency test |
+| TIME-008 | WELCOME trigger confirmation shall occur within 1500 ms after a stable wave/intent signal is detected. | Pi | Vision timing test |
+| TIME-009 | Local simple question response in WELCOME_TALK should begin within 1000 ms after speech recognition result is available. | Pi | Interaction timing test |
+
+## Power Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| PWR-001 | Logic power shall be isolated from hoverboard motor power except for required common ground reference. | Electrical | Wiring inspection |
+| PWR-002 | Pi shall monitor STM32-reported hoverboard battery voltage when available. | Pi | `TEL:BAT` log |
+| PWR-003 | STM32 shall treat hoverboard battery below 34.0 V as critical low voltage for the current firmware baseline. | STM32 | Firmware/config review |
+| PWR-004 | On critical low voltage, STM32 shall force wheel speed and steer commands to zero. | STM32 | Low-voltage test |
+| PWR-005 | Pi shall warn the operator before critical cutoff when battery warning threshold is reached. | Pi | Warning test |
+| PWR-006 | Pi shall not enter WELCOME, DANCE, or MANUAL if battery status is critical. | Pi | Mode transition test |
+| PWR-007 | Power thresholds shall be configurable and documented before field testing. | Project | Config review |
 
 ## Interface Requirements
 
@@ -76,6 +104,9 @@ Every requirement should have:
 | IF-STM32-007 | STM32 shall report telemetry with `TEL:` messages. | Serial log |
 | IF-STM32-008 | STM32 shall report obstacle distance with `OBS:` messages. | Serial log |
 | IF-STM32-009 | STM32 shall report faults with `ALERT:` messages. | Fault injection |
+| IF-STM32-010 | STM32 shall respond to `CMD:PING` within 100 ms. | Timing test |
+| IF-STM32-011 | STM32 telemetry shall include battery voltage when hoverboard feedback is valid. | Telemetry test |
+| IF-STM32-012 | STM32 shall include enough alert reason text for Pi to choose IDLE, ERROR, or continue. | Fault injection |
 
 ### Pi To Uno
 
@@ -195,6 +226,7 @@ Pluto is awake, safe, observant, and visually alive, but not moving.
 | VER-IDLE-005 | Disconnect Uno during IDLE. | Warning only, STM32 heartbeat continues |
 | VER-IDLE-006 | Place obstacle in front during IDLE. | `OBS:` changes, no movement triggered |
 | VER-IDLE-007 | Trigger MANUAL from IDLE. | `CMD:STOP` then mode changes to MANUAL |
+| VER-IDLE-008 | Measure STM32 ping response time in IDLE. | `ACK:PING` within 100 ms |
 
 ## STATE-2: MANUAL
 
@@ -277,6 +309,7 @@ chain before autonomous behavior is added.
 | VER-MANUAL-004 | Command above speed limit. | clamped command in log |
 | VER-MANUAL-005 | Place obstacle in front and command forward. | STM32 blocks forward motion |
 | VER-MANUAL-006 | Unplug STM32 during MANUAL. | ERROR state, no further drive commands |
+| VER-MANUAL-007 | Measure operator input to serial command latency. | command written within 150 ms |
 
 ## STATE-3: WELCOME
 
@@ -319,6 +352,18 @@ WELCOME_DONE
 | STATE-3.11 | WELCOME v1 may use operator/web trigger instead of full vision wave detection. | Pi | Manual trigger test |
 | STATE-3.12 | Future wave detection shall require multiple frames above confidence threshold. | Pi | Vision test |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
+| STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
+| STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |
+
+### Crowd Handling Requirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-3.16 | In a multi-person scene, Pi shall select exactly one active welcome target. | Pi | Crowd test |
+| STATE-3.17 | Target selection should prefer confirmed direct interaction over closest person. | Pi | Scenario test |
+| STATE-3.18 | Target selection should prefer closest confirmed waver when multiple people wave. | Pi | Scenario test |
+| STATE-3.19 | Once selected, the active target shall remain locked for at least 10 seconds unless lost or emergency stop occurs. | Pi | Attention lock test |
+| STATE-3.19.1 | Pluto may acknowledge crowd presence through face/text without changing active target. | Pi + Uno | Crowd UI test |
 
 ### Approach Requirements
 
@@ -330,6 +375,12 @@ WELCOME_DONE
 | STATE-3.23 | WELCOME_APPROACH shall stop at configured greeting distance. | Pi | Distance test |
 | STATE-3.24 | WELCOME_APPROACH shall not exceed configured welcome speed limit. | Pi | Command clamp log |
 | STATE-3.25 | If path is blocked, Pluto shall stop and optionally request space. | Pi + STM32 | Obstacle alert log |
+| STATE-3.26 | WELCOME_APPROACH maximum speed shall be configured before testing and shall start at a low validation value. | Pi | Config review |
+| STATE-3.27 | WELCOME_APPROACH shall stop no closer than 80 cm from the selected person in v1. | Pi | Distance test |
+| STATE-3.28 | If the selected person moves during approach, Pi shall update target direction only if the target remains confidently tracked. | Pi | Moving target test |
+| STATE-3.29 | If the selected person moves closer than greeting distance, Pi shall stop and transition to WELCOME_ARRIVED. | Pi | Moving target test |
+| STATE-3.29.1 | If target tracking is uncertain, Pi shall command `CMD:STOP` before recalculating approach. | Pi + STM32 | Target uncertainty test |
+| STATE-3.29.2 | WELCOME_APPROACH shall not command reverse motion unless explicitly required by avoidance or abort behavior. | Pi | Command log |
 
 ### Arrival And Talk Requirements
 
@@ -351,6 +402,21 @@ WELCOME_DONE
 | STATE-3.42 | Return shall use STM32 odometry or a bounded return command. | Pi + STM32 | Return log |
 | STATE-3.43 | Obstacle safety shall remain active during return. | STM32 | Obstacle test |
 | STATE-3.44 | WELCOME shall exit to IDLE only after return is complete or explicitly aborted safely. | Pi | Mode log |
+| STATE-3.45 | WELCOME_RETURN shall begin with `CMD:STOP` before any return motion command. | Pi + STM32 | Serial log |
+| STATE-3.46 | WELCOME_RETURN maximum speed shall be less than or equal to WELCOME_APPROACH maximum speed. | Pi | Command bounds |
+| STATE-3.47 | WELCOME_RETURN shall use a completion threshold before declaring base reached. | Pi + STM32 | Return distance log |
+| STATE-3.48 | If return path is blocked, Pluto shall stop and remain in WELCOME_RETURN or enter ERROR based on timeout. | Pi + STM32 | Obstacle return test |
+| STATE-3.49 | WELCOME_RETURN shall have a maximum allowed duration before faulting to ERROR. | Pi | Return timeout test |
+
+### Return Navigation Subrequirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-3.42.1 | Pi or STM32 shall define base as the pose recorded before WELCOME approach in v1. | Pi + STM32 | Odom log |
+| STATE-3.42.2 | Return navigation shall be bounded by distance and time, not infinite retry. | Pi | Timeout test |
+| STATE-3.42.3 | Return completion shall require both low commanded speed and position within threshold. | Pi + STM32 | Return log |
+| STATE-3.42.4 | Return shall be considered degraded if odometry is unavailable or invalid. | Pi | Fault injection |
+| STATE-3.42.5 | Degraded return shall stop Pluto and request operator assistance instead of guessing. | Pi + Uno | Fault behavior test |
 
 ### Fault Behavior Requirements
 
@@ -372,6 +438,10 @@ WELCOME_DONE
 | VER-WELCOME-005 | Arrive at greeting distance. | `CMD:STOP`, welcome face, greeting line |
 | VER-WELCOME-006 | End session. | return starts, other mode requests blocked |
 | VER-WELCOME-007 | Return complete. | `ACK:RETURN_COMPLETE`, state IDLE |
+| VER-WELCOME-008 | Multiple people wave. | one target selected, target lock logged |
+| VER-WELCOME-009 | Person moves during approach. | target update or safe stop logged |
+| VER-WELCOME-010 | Return path blocked. | stop behavior, timeout or waiting behavior |
+| VER-WELCOME-011 | Return exceeds duration limit. | ERROR state with return fault reason |
 
 ## STATE-4: DANCE
 
@@ -518,6 +588,7 @@ GAME_LATER is not implemented in v1.
 | TRANS-004 | ERROR may interrupt any state. | Pi | Fault injection |
 | TRANS-005 | WELCOME_RETURN shall block all non-error transitions until complete. | Pi | Return test |
 | TRANS-006 | GAME_LATER shall not be reachable in v1. | Pi | Mode list test |
+| TRANS-007 | Motion states shall be blocked if battery status is critical. | Pi | Battery transition test |
 
 ## Requirement-To-Interface Trace
 
@@ -525,10 +596,36 @@ GAME_LATER is not implemented in v1.
 | --- | --- | --- | --- | --- |
 | IDLE | `CMD:PING`, `CMD:STOP` | `ID`, `TEL`, `OBS`, `ALERT` | `MODE:IDLE`, `FACE:IDLE` | optional low-rate camera |
 | MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | operator controls |
-| WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | vision/speech |
+| WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN`, `CMD:RESET_HOME` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | vision/speech/crowd target |
 | DANCE | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, optional `CMD:ARM` | `ACK`, `OBS`, `ALERT` | `MODE:DANCE`, `FACE:DANCE` | audio file, operator start |
 | ERROR | `CMD:STOP`, `CMD:PING` | `ID`, `TEL`, `ALERT` | `MODE:ERROR`, `WARN` | reset request |
 | GAME_LATER | none in v1 | none in v1 | `TEXT:Game later` | operator request |
+
+## Timing-To-Test Trace
+
+| Timing ID | Related Requirements | Verification |
+| --- | --- | --- |
+| TIME-001 | IF-STM32-010, STATE-1.10, STATE-2.10 | `VER-IDLE-008` |
+| TIME-002 | IF-STM32-002, SAFE-001 | heartbeat log |
+| TIME-003 | SAFE-001 | Pi heartbeat timeout test |
+| TIME-004 | IF-STM32-008, STATE-1.12 | OBS timing log |
+| TIME-005 | SAFE-002, STATE-3.21, STATE-4.21 | obstacle timing test |
+| TIME-006 | STATE-5.1, STATE-5.4 | alert handling log |
+| TIME-007 | STATE-2.12, STATE-2.13 | `VER-MANUAL-007` |
+| TIME-008 | STATE-3.10, STATE-3.12 | welcome trigger timing test |
+| TIME-009 | STATE-3.33 | interaction timing test |
+
+## Power-To-Test Trace
+
+| Power ID | Related Requirements | Verification |
+| --- | --- | --- |
+| PWR-001 | SYS-008 | wiring inspection |
+| PWR-002 | IF-STM32-011 | telemetry log |
+| PWR-003 | SAFE-007 | firmware/config review |
+| PWR-004 | SAFE-007 | low-voltage stop test |
+| PWR-005 | SAFE-008 | warning threshold test |
+| PWR-006 | TRANS-007 | battery transition test |
+| PWR-007 | Implementation Gate | config review |
 
 ## Implementation Gate
 
