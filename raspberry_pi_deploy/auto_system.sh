@@ -19,8 +19,8 @@ echo "Installing one-shot Pluto system boot service..."
 sudo tee "/etc/systemd/system/${SYSTEM_SERVICE}.service" >/dev/null <<EOF
 [Unit]
 Description=Pluto Full Boot: Hotspot + Motors Website
-After=NetworkManager.service
-Wants=NetworkManager.service
+After=NetworkManager.service NetworkManager-wait-online.service
+Wants=NetworkManager.service NetworkManager-wait-online.service
 
 [Service]
 Type=simple
