@@ -66,7 +66,7 @@ PASS: pluto1234
 Open:
 
 ```text
-http://10.42.0.1:8080
+http://192.168.4.1:8080
 ```
 
 ## Run On Boot
@@ -81,7 +81,7 @@ After that, every time the Raspberry Pi powers on:
 
 - The Pluto hotspot starts.
 - The motors test website starts.
-- You can join `Pluto-Motors` and open `http://10.42.0.1:8080`.
+- You can join `Pluto-Motors` and open `http://192.168.4.1:8080`.
 
 If the Pi still joins your normal WiFi after reboot, pull the latest code and
 rerun auto mode:
@@ -89,8 +89,8 @@ rerun auto mode:
 ```bash
 git pull
 cd raspberry_pi_deploy
-chmod +x install.sh setup_hotspot.sh run.sh auto_system.sh unauto_system.sh
-./auto_system.sh
+chmod +x *.sh
+./fix_now.sh
 sudo reboot
 ```
 
@@ -102,7 +102,7 @@ sudo systemctl status pluto-system
 sudo journalctl -u pluto-system -n 80 --no-pager
 ```
 
-`wlan0` should show `10.42.0.1`.
+`wlan0` should show `192.168.4.1`.
 
 To undo auto-start and return the Pi to normal:
 

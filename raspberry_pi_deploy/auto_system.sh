@@ -13,6 +13,7 @@ chmod +x "${APP_DIR}/pluto_system_boot.sh"
 
 echo "Installing Pluto motor website service..."
 "${APP_DIR}/install.sh"
+sudo systemctl enable --now NetworkManager
 
 echo "Installing one-shot Pluto system boot service..."
 sudo tee "/etc/systemd/system/${SYSTEM_SERVICE}.service" >/dev/null <<EOF
@@ -49,7 +50,7 @@ echo
 echo "Pluto auto-start is ON."
 echo "When the Raspberry Pi powers up:"
 echo "  1. WiFi hotspot starts: Pluto-Motors"
-echo "  2. Website starts:      http://10.42.0.1:8080"
+echo "  2. Website starts:      http://192.168.4.1:8080"
 echo
 echo "Check it with:"
 echo "  sudo systemctl status pluto-system"

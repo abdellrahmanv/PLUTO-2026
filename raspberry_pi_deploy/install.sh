@@ -7,6 +7,7 @@ RUN_USER="${SUDO_USER:-${USER}}"
 
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip network-manager
+sudo systemctl enable --now NetworkManager
 
 cd "$APP_DIR"
 python3 -m venv .venv

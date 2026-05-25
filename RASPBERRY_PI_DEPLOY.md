@@ -18,7 +18,7 @@ raspberry_pi_deploy/app.py
 Default website:
 
 ```text
-http://10.42.0.1:8080
+http://192.168.4.1:8080
 ```
 
 Default hotspot:
@@ -46,7 +46,7 @@ Auto-start website + WiFi hotspot on every Raspberry Pi power-up:
 ./auto_system.sh
 ```
 
-After reboot, `wlan0` should be `10.42.0.1`, not your normal router IP.
+After reboot, `wlan0` should be `192.168.4.1`, not your normal router IP.
 
 Undo auto-start and restore normal startup/network behavior:
 
