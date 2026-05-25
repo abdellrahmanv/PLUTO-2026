@@ -12,3 +12,15 @@ Current study direction:
 
 The architecture is still allowed to change. For now, keep the system simple,
 safe, and easy to test one layer at a time.
+
+## Engineering Method
+
+Pluto code should be implemented with a systems-engineering workflow:
+
+- define the interface,
+- implement one layer,
+- verify it on the bench,
+- add telemetry and logs,
+- then integrate the next layer.
+
+See `SYSTEMS_ENGINEERING.md` before adding new robot behavior.
