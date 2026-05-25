@@ -37,6 +37,7 @@ Before implementation, each subsystem must have:
 - Failure behavior.
 - Test method.
 - Debug evidence.
+- Feature memory record.
 
 Bootstrap is treated as a subsystem. Any new dependency, service, hardware
 device, or operating-system assumption must include setup, detection, recovery,
@@ -403,6 +404,12 @@ A feature is done only when:
 - It has a debug log or telemetry path.
 - It fails safe.
 - It is documented.
+- It has a feature memory file or updates an existing one.
 
 A Raspberry Pi feature is done only when bootstrap can install or validate its
 dependencies and can clearly report missing hardware or failed services.
+
+Feature memory is mandatory. Each implemented requirement or feature must have
+a Markdown record under `feature_memory/` that explains the design, interfaces,
+debug procedure, logs, failure modes, safety assumptions, and verification
+evidence.

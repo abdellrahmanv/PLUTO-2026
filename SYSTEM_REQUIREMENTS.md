@@ -22,6 +22,7 @@ SAFE-xxx       Safety requirement
 BOOT-xxx       Bootstrap/setup requirement
 HW-xxx         Hardware detection requirement
 WEB-xxx        Operator website requirement
+MEM-xxx        Feature memory and design record requirement
 STATE-x        Robot state
 STATE-x.y      State requirement
 STATE-x.y.z    State subrequirement
@@ -55,6 +56,7 @@ Every requirement should have:
 | SYS-009 | Pluto shall provide an automatic Raspberry Pi setup path that installs, configures, validates, and reports the system state. | Pi | Bootstrap verification |
 | SYS-010 | Pluto shall provide actionable diagnostics when automatic setup cannot recover a required subsystem. | Pi | Fault injection |
 | SYS-011 | Pluto shall provide an operator website identified as project `PLUTO`. | Pi | Website test |
+| SYS-012 | Pluto shall keep a feature memory record for every implemented requirement or feature. | Project | Memory record review |
 
 ## Safety Requirements
 
@@ -198,6 +200,35 @@ STM32 safety layer.
 | WEB-SAFE-002 | Website shall not allow MANUAL, WELCOME, or DANCE if STM32 is unavailable. | Pi | Safety gate test |
 | WEB-SAFE-003 | Website shall not allow MANUAL, WELCOME, or DANCE if battery status is critical. | Pi | Battery gate test |
 | WEB-SAFE-004 | Website shall not allow new mode selection during WELCOME_RETURN except emergency stop. | Pi | Return gate test |
+
+## Feature Memory Requirements
+
+Every implemented feature shall leave behind a design and debug memory record.
+This is required so Pluto can be restarted, transferred, audited, or debugged at
+the deepest implementation point without depending on one person's memory.
+
+Feature memory files live under:
+
+```text
+feature_memory/
+```
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| MEM-001 | Every new implemented feature shall have a feature memory file before it is considered done. | Project | Memory record review |
+| MEM-002 | Every feature memory file shall list the requirement IDs it implements. | Project | Trace review |
+| MEM-003 | Every feature memory file shall describe the design intent and why that design was chosen. | Project | Design review |
+| MEM-004 | Every feature memory file shall describe interfaces used by the feature. | Project | Interface review |
+| MEM-005 | Every feature memory file shall describe how to run or exercise the feature. | Project | Runbook review |
+| MEM-006 | Every feature memory file shall describe how to debug the feature when it fails. | Project | Debug review |
+| MEM-007 | Every feature memory file shall list expected logs, telemetry, or observable evidence. | Project | Evidence review |
+| MEM-008 | Every feature memory file shall list known failure modes and likely root causes. | Project | Fault review |
+| MEM-009 | Every feature memory file shall list safety assumptions and fail-safe behavior. | Project | Safety review |
+| MEM-010 | Every feature memory file shall list verification tests linked to `VER-*` IDs. | Project | Verification review |
+| MEM-011 | Every code change implementing a requirement shall update an existing memory file or create a new one. | Project | Pull request/review |
+| MEM-012 | Memory files shall be written in plain Markdown and kept in the repository. | Project | Repo review |
+| MEM-013 | Memory files shall include a "Last validated" field when hardware tests are performed. | Project | Test record review |
+| MEM-014 | Memory files shall include unresolved questions or open risks when the design is incomplete. | Project | Risk review |
 
 ## Interface Requirements
 
@@ -928,6 +959,25 @@ GAME_LATER is not implemented in v1.
 | WEB-024 | operator usability | `VER-WEB-009` |
 | WEB-025 | state naming | UI inspection |
 
+## Feature-Memory-To-Test Trace
+
+| Memory ID | Related Requirements | Verification |
+| --- | --- | --- |
+| MEM-001 | SYS-012, Implementation Gate | memory file exists |
+| MEM-002 | all implemented requirements | trace review |
+| MEM-003 | design intent | design review |
+| MEM-004 | interface control | interface review |
+| MEM-005 | runbook | run review |
+| MEM-006 | debug method | debug review |
+| MEM-007 | SYS-005 | evidence review |
+| MEM-008 | fault handling | fault review |
+| MEM-009 | SAFE requirements | safety review |
+| MEM-010 | verification plan | `VER-*` trace review |
+| MEM-011 | code changes | code review |
+| MEM-012 | repository documentation | repo review |
+| MEM-013 | hardware validation | test record review |
+| MEM-014 | risk tracking | risk review |
+
 ## Implementation Gate
 
 Before code for a state begins:
@@ -939,6 +989,7 @@ Before code for a state begins:
 5. Any mismatch between docs, firmware, and wiring must be resolved.
 6. Bootstrap impact must be defined for any new dependency or hardware device.
 7. Website impact must be defined for any new state, fault, or operator action.
+8. Feature memory must exist or be updated for every implemented requirement.
 
 The next code implementation should start with the validation tools required to
 prove `IF-STM32-*` and `IF-UNO-*`, not with high-level behavior.
