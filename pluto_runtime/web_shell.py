@@ -77,9 +77,9 @@ class PlutoWebContext:
         camera_resolution: tuple[int, int] = (320, 320),
         camera_fps: int = 30,
         camera_stream_fps: int = 8,
-        camera_frame_skip: int = 2,
-        camera_detection_hold: float = 0.8,
-        camera_confidence: float = 0.35,
+        camera_frame_skip: int = 1,
+        camera_detection_hold: float = 2.0,
+        camera_confidence: float = 0.30,
         yolo_model: str | None = None,
     ) -> None:
         self.serial_baud = serial_baud
@@ -820,9 +820,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--camera-resolution", default="320x320", help="Capture resolution WIDTHxHEIGHT. Default: 320x320.")
     parser.add_argument("--camera-fps", type=int, default=30, help="Requested camera FPS. Default: 30.")
     parser.add_argument("--camera-stream-fps", type=int, default=8, help="MJPEG stream FPS. Default: 8.")
-    parser.add_argument("--camera-frame-skip", type=int, default=2, help="Run human detection every Nth frame. Default: 2.")
-    parser.add_argument("--camera-detection-hold", type=float, default=0.8, help="Seconds to keep last human detection visible after a missed frame.")
-    parser.add_argument("--camera-confidence", type=float, default=0.35, help="Human detection confidence threshold. Default: 0.35.")
+    parser.add_argument("--camera-frame-skip", type=int, default=1, help="Run human detection every Nth frame. Default: 1.")
+    parser.add_argument("--camera-detection-hold", type=float, default=2.0, help="Seconds to keep last human detection visible after missed frames.")
+    parser.add_argument("--camera-confidence", type=float, default=0.30, help="Human detection confidence threshold. Default: 0.30.")
     parser.add_argument("--yolo-model", help="TFLite YOLO model path. Defaults to PLUTO_YOLO_MODEL or /home/pi/yolo/model/yolov8n-fp16.tflite.")
     return parser.parse_args(argv)
 

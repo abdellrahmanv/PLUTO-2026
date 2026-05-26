@@ -37,8 +37,8 @@ class CameraStatus:
     stream_fps: float = 0.0
     inference_fps: float = 0.0
     inference_ms: float = 0.0
-    frame_skip: int = 2
-    detection_hold_s: float = 0.8
+    frame_skip: int = 1
+    detection_hold_s: float = 2.0
     warmup_remaining: int = 0
     detections: list[HumanDetection] = field(default_factory=list)
     human_count: int = 0
@@ -391,11 +391,11 @@ class CameraService:
         resolution: tuple[int, int] = (320, 320),
         framerate: int = 30,
         stream_fps: int = 8,
-        frame_skip: int = 2,
-        detection_hold_s: float = 0.8,
+        frame_skip: int = 1,
+        detection_hold_s: float = 2.0,
         warmup_frames: int = 5,
         model_path: str | None = None,
-        confidence_threshold: float = 0.35,
+        confidence_threshold: float = 0.30,
     ) -> None:
         self.device = device
         self.resolution = resolution

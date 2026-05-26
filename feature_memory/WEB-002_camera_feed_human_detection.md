@@ -102,9 +102,9 @@ Configuration values, defaults, limits, and files:
 | `--camera-resolution` | `320x320` | positive WIDTHxHEIGHT | Square capture improves YOLO stability |
 | `--camera-fps` | `30` | camera-supported FPS | Requested capture rate |
 | `--camera-stream-fps` | `8` | positive integer | Browser stream target |
-| `--camera-frame-skip` | `2` | positive integer | Runs detector every Nth frame |
-| `--camera-detection-hold` | `0.8` | seconds | Prevents 0/1 flicker on single missed frames |
-| `--camera-confidence` | `0.35` | `0.0` to `1.0` | Slightly lower person threshold for real-room stability |
+| `--camera-frame-skip` | `1` | positive integer | Runs detector every frame for stable human count |
+| `--camera-detection-hold` | `2.0` | seconds | Prevents 0/1 flicker on missed frames |
+| `--camera-confidence` | `0.30` | `0.0` to `1.0` | Lower person threshold for real-room stability |
 | `--yolo-model` | `/home/pi/yolo/model/yolov8n-fp16.tflite` | existing `.tflite` file | Human detection model |
 | `PLUTO_YOLO_MODEL` | unset | existing `.tflite` file | Environment override |
 
@@ -147,7 +147,7 @@ Optional explicit webcam:
   --camera-device /dev/video0 \
   --camera-resolution 320x320 \
   --camera-stream-fps 8 \
-  --camera-frame-skip 2 \
+  --camera-frame-skip 1 \
   --yolo-model /home/pi/yolo/model/yolov8n-fp16.tflite
 ```
 
