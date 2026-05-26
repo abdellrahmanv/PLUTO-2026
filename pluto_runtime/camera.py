@@ -31,13 +31,14 @@ class CameraStatus:
     backend: str = "none"
     device: str | int | None = None
     resolution: list[int] = field(default_factory=lambda: [0, 0])
-    configured_resolution: list[int] = field(default_factory=lambda: [320, 240])
+    configured_resolution: list[int] = field(default_factory=lambda: [320, 320])
     model_input_size: int = 224
     capture_fps: float = 0.0
     stream_fps: float = 0.0
     inference_fps: float = 0.0
     inference_ms: float = 0.0
     frame_skip: int = 2
+    detection_hold_s: float = 0.8
     warmup_remaining: int = 0
     detections: list[HumanDetection] = field(default_factory=list)
     human_count: int = 0
@@ -87,7 +88,7 @@ class ThreadedCamera:
     def __init__(
         self,
         device: str | int | None = None,
-        resolution: tuple[int, int] = (320, 240),
+        resolution: tuple[int, int] = (320, 320),
         framerate: int = 30,
         use_mjpg: bool = True,
     ) -> None:
@@ -387,20 +388,24 @@ class CameraService:
     def __init__(
         self,
         device: str | int | None = None,
-        resolution: tuple[int, int] = (320, 240),
+        resolution: tuple[int, int] = (320, 320),
         framerate: int = 30,
         stream_fps: int = 8,
         frame_skip: int = 2,
+        detection_hold_s: float = 0.8,
         warmup_frames: int = 5,
         model_path: str | None = None,
+        confidence_threshold: float = 0.35,
     ) -> None:
         self.device = device
         self.resolution = resolution
         self.framerate = framerate
         self.target_stream_fps = stream_fps
         self.frame_skip = max(1, frame_skip)
+        self.detection_hold_s = max(0.0, detection_hold_s)
         self.warmup_frames = max(0, warmup_frames)
         self.model_path = model_path or find_model_path()
+        self.confidence_threshold = confidence_threshold
         self.camera: ThreadedCamera | None = None
         self.detector: YoloHumanDetector | None = None
         self.running = False
@@ -408,6 +413,7 @@ class CameraService:
         self.lock = threading.Lock()
         self.latest_jpeg: bytes | None = None
         self.latest_detections: list[HumanDetection] = []
+        self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
         self.stream_fps_value = 0.0
@@ -427,6 +433,7 @@ class CameraService:
         self.detector = None
         if self.model_path:
             detector = YoloHumanDetector(self.model_path)
+            detector.confidence_threshold = self.confidence_threshold
             if detector.load():
                 self.detector = detector
             else:
@@ -469,7 +476,11 @@ class CameraService:
                 if warmup_remaining > 0:
                     detections = []
                     warmup_remaining -= 1
-                self.latest_detections = detections
+                if detections:
+                    self.latest_detections = detections
+                    self.last_positive_detection_time = time.monotonic()
+                elif time.monotonic() - self.last_positive_detection_time > self.detection_hold_s:
+                    self.latest_detections = []
 
             annotated = frame.copy()
             self._draw_overlay(cv2, annotated, self.latest_detections)
@@ -515,6 +526,7 @@ class CameraService:
             inference_fps=detector.inference_fps() if detector else 0.0,
             inference_ms=detector.average_inference_ms() if detector else 0.0,
             frame_skip=self.frame_skip,
+            detection_hold_s=self.detection_hold_s,
             warmup_remaining=warmup_remaining,
             detections=detections,
             human_count=len(detections),
