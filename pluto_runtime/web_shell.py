@@ -69,7 +69,23 @@ class PlutoStatus:
     mode_manager: dict[str, Any] = field(default_factory=dict)
     stm32_runtime: dict[str, Any] = field(default_factory=dict)
     error: dict[str, Any] = field(default_factory=dict)
+    manual: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
+
+
+@dataclass
+class ManualRuntime:
+    enabled: bool = False
+    speed_intent: int = 0
+    steer_intent: int = 0
+    max_speed: int = 80
+    max_steer: int = 80
+    command_period_ms: int = 150
+    last_command_at: float | None = None
+    last_release_at: float | None = None
+    last_result: dict[str, Any] = field(default_factory=dict)
+    command_count: int = 0
+    blocked_reason: str | None = None
 
 
 class PlutoWebContext:
@@ -91,6 +107,7 @@ class PlutoWebContext:
         self.started_at = time.time()
         self.mode_manager = ModeManager()
         self.stm32_link: Stm32SerialLink | None = None
+        self.manual = ManualRuntime()
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
@@ -192,6 +209,9 @@ class PlutoWebContext:
 
         with self.lock:
             result = self.mode_manager.enter_error("Emergency stop requested from website", source="website")
+            self.manual.enabled = False
+            self.manual.speed_intent = 0
+            self.manual.steer_intent = 0
             self.log("stop", f"Emergency stop requested, serial result: {stop['detail']}")
 
         return {
@@ -207,6 +227,9 @@ class PlutoWebContext:
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
         with self.lock:
             result = self.mode_manager.enter_error(clean_reason, source=source)
+            self.manual.enabled = False
+            self.manual.speed_intent = 0
+            self.manual.steer_intent = 0
             self.log("error", f"Fault injected: {clean_reason}; stop result: {stop['detail']}")
         return {"accepted": True, "stop": stop, "transition": result.to_dict(), "state": result.current_state}
 
@@ -271,11 +294,92 @@ class PlutoWebContext:
             stop_result = self.send_stm32_stop_safe(stm32.port)
             self.log("stop", f"Transition stop guard for {requested_state}: {stop_result['detail']}")
 
+        if result.accepted:
+            self.update_manual_enabled(result.current_state == "MANUAL")
+
         level = "pass" if result.accepted else "warn"
         self.log(level, f"State request {requested_state}: {result.reason}")
         payload = result.to_dict()
         payload["stop_guard"] = stop_result
         return payload
+
+    def update_manual_enabled(self, enabled: bool) -> None:
+        self.manual.enabled = enabled
+        if enabled:
+            self.manual.speed_intent = 0
+            self.manual.steer_intent = 0
+            self.manual.blocked_reason = None
+            self.manual.last_result = {"ok": True, "detail": "MANUAL enabled with zero intent"}
+        else:
+            self.manual.speed_intent = 0
+            self.manual.steer_intent = 0
+            self.manual.blocked_reason = "manual disabled"
+
+    @staticmethod
+    def clamp(value: int, limit: int) -> int:
+        return max(-limit, min(limit, int(value)))
+
+    def manual_drive(self, speed: int, steer: int) -> dict[str, Any]:
+        if self.mode_manager.current_state != "MANUAL" or not self.manual.enabled:
+            result = {"accepted": False, "reason": "manual controls are only active in MANUAL"}
+            self.manual.blocked_reason = result["reason"]
+            self.log("warn", f"Manual drive rejected: {result['reason']}")
+            return result
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            result = {"accepted": False, "reason": "STM32 unavailable"}
+            self.manual.blocked_reason = result["reason"]
+            self.mode_manager.enter_error("STM32 unavailable during MANUAL", source="manual")
+            self.log("error", "Manual drive rejected: STM32 unavailable")
+            return result
+
+        clamped_speed = self.clamp(speed, self.manual.max_speed)
+        clamped_steer = self.clamp(steer, self.manual.max_steer)
+        obstacle_reason = self.forward_obstacle_reason(clamped_speed)
+        if obstacle_reason:
+            clamped_speed = 0
+            self.manual.blocked_reason = obstacle_reason
+            self.log("warn", f"Manual forward intent blocked: {obstacle_reason}")
+        else:
+            self.manual.blocked_reason = None
+
+        started = time.monotonic()
+        serial_result = self.stm32_link.send_drive(clamped_speed, clamped_steer)
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        self.manual.speed_intent = clamped_speed
+        self.manual.steer_intent = clamped_steer
+        self.manual.last_command_at = time.time()
+        self.manual.command_count += 1
+        self.manual.last_result = serial_result
+        if clamped_speed != 0 or clamped_steer != 0:
+            self.log("drive", f"MANUAL drive speed={clamped_speed} steer={clamped_steer} result={serial_result['detail']}")
+        return {
+            "accepted": bool(serial_result["ok"]),
+            "speed": clamped_speed,
+            "steer": clamped_steer,
+            "elapsed_ms": elapsed_ms,
+            "serial": serial_result,
+            "blocked_reason": self.manual.blocked_reason,
+        }
+
+    def manual_stop(self) -> dict[str, Any]:
+        self.manual.speed_intent = 0
+        self.manual.steer_intent = 0
+        self.manual.last_release_at = time.time()
+        stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+        self.manual.last_result = stop
+        self.log("stop", f"MANUAL stop result: {stop['detail']}")
+        return {"accepted": bool(stop["ok"]), "speed": 0, "steer": 0, "serial": stop}
+
+    def forward_obstacle_reason(self, speed: int) -> str | None:
+        if speed <= 0 or self.stm32_link is None:
+            return None
+        status = self.stm32_link.get_status()
+        obstacles = status.obstacles
+        for key in ("F", "FL", "FR"):
+            value = obstacles.get(key)
+            if isinstance(value, (int, float)) and value < 60:
+                return f"obstacle {key} at {value:.0f} cm"
+        return None
 
     def shutdown(self, confirm: str | None) -> dict[str, Any]:
         if confirm != "PLUTO SHUTDOWN":
@@ -311,6 +415,7 @@ class PlutoWebContext:
                 mode_manager=mode_snapshot,
                 stm32_runtime=stm32_runtime,
                 error=self.error_status(mode_snapshot, stm32_runtime),
+                manual=asdict(self.manual),
                 events=events,
             )
             return status
@@ -353,6 +458,9 @@ class PlutoWebContext:
             self.last_alert_escalated = alert
             stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
             result = self.mode_manager.enter_error(f"STM32 critical alert: {alert}", source="stm32_alert")
+            self.manual.enabled = False
+            self.manual.speed_intent = 0
+            self.manual.steer_intent = 0
             self.log("error", f"Critical alert escalated to ERROR: {alert}; stop result: {stop['detail']}; {result.reason}")
 
 
@@ -614,6 +722,21 @@ def html_page() -> str:
     .primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
     .state {{ min-width: 118px; }}
     .state[disabled] {{ opacity: 0.55; cursor: not-allowed; }}
+    .manual-pad {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(76px, 1fr));
+      gap: 10px;
+      max-width: 360px;
+      margin-top: 12px;
+    }}
+    .manual-pad button {{
+      aspect-ratio: 1 / 0.72;
+      font-size: 20px;
+    }}
+    .manual-pad .wide {{
+      grid-column: span 3;
+      aspect-ratio: auto;
+    }}
     .events {{
       min-height: 180px;
       max-height: 320px;
@@ -718,6 +841,18 @@ def html_page() -> str:
         <div class="metric"><span class="label">Last Line</span><span class="value" id="stmLine">...</span></div>
       </section>
       <section class="span-6">
+        <h2>Manual Control</h2>
+        <div class="metric"><span class="label">Enabled</span><span class="value" id="manualEnabled">false</span></div>
+        <div class="metric"><span class="label">Intent</span><span class="value" id="manualIntent">0,0</span></div>
+        <div class="metric"><span class="label">Limit</span><span class="value" id="manualLimit">...</span></div>
+        <div class="metric"><span class="label">Blocked</span><span class="value" id="manualBlocked">none</span></div>
+        <div class="manual-pad" id="manualPad">
+          <span></span><button data-speed="80" data-steer="0">Forward</button><span></span>
+          <button data-speed="0" data-steer="-80">Left</button><button class="danger" id="manualStop">Stop</button><button data-speed="0" data-steer="80">Right</button>
+          <span></span><button data-speed="-80" data-steer="0">Back</button><span></span>
+        </div>
+      </section>
+      <section class="span-6">
         <h2>Camera</h2>
         <div class="cameraBox">
           <img id="cameraFeed" alt="PLUTO camera feed">
@@ -787,6 +922,15 @@ def html_page() -> str:
       document.getElementById('stmTel').textContent = stm.telemetry ? JSON.stringify(stm.telemetry) : '{{}}';
       document.getElementById('stmObs').textContent = stm.obstacles ? JSON.stringify(stm.obstacles) : '{{}}';
       document.getElementById('stmLine').textContent = stm.last_line || stm.error || 'none';
+      const manual = data.manual || {{}};
+      document.getElementById('manualEnabled').textContent = manual.enabled ? 'true' : 'false';
+      document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;
+      document.getElementById('manualLimit').textContent = `${{manual.max_speed || 0}} speed / ${{manual.max_steer || 0}} steer`;
+      document.getElementById('manualBlocked').textContent = manual.blocked_reason || 'none';
+      document.querySelectorAll('#manualPad button[data-speed]').forEach(btn => {{
+        btn.disabled = !manual.enabled;
+      }});
+      document.getElementById('manualStop').disabled = !manual.enabled;
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -837,6 +981,43 @@ def html_page() -> str:
       }});
       await refresh();
     }}));
+    let manualTimer = null;
+    async function manualDrive(speed, steer) {{
+      await api('/api/manual/drive', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{speed, steer}})
+      }});
+      await refresh();
+    }}
+    async function manualStop() {{
+      if (manualTimer) {{
+        clearInterval(manualTimer);
+        manualTimer = null;
+      }}
+      await api('/api/manual/stop', {{method: 'POST'}});
+      await refresh();
+    }}
+    document.querySelectorAll('#manualPad button[data-speed]').forEach(btn => {{
+      const start = async (event) => {{
+        event.preventDefault();
+        const speed = Number(btn.dataset.speed);
+        const steer = Number(btn.dataset.steer);
+        if (manualTimer) clearInterval(manualTimer);
+        await manualDrive(speed, steer);
+        manualTimer = setInterval(() => manualDrive(speed, steer).catch(console.error), 150);
+      }};
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('touchstart', start, {{passive: false}});
+    }});
+    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(name => {{
+      document.addEventListener(name, () => {{
+        if (manualTimer) manualStop().catch(console.error);
+      }});
+    }});
+    document.getElementById('manualStop').addEventListener('click', async () => {{
+      await manualStop();
+    }});
     refresh();
     setInterval(refresh, 1000);
   </script>
@@ -939,6 +1120,16 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                         bool(body.get("reset_fault", False)),
                     ),
                 )
+                return
+            if path == "/api/manual/drive":
+                body = self.read_json()
+                self.send_json(
+                    HTTPStatus.OK,
+                    self.context.manual_drive(int(body.get("speed", 0)), int(body.get("steer", 0))),
+                )
+                return
+            if path == "/api/manual/stop":
+                self.send_json(HTTPStatus.OK, self.context.manual_stop())
                 return
             if path == "/api/shutdown":
                 body = self.read_json()

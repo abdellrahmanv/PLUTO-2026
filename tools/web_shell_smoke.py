@@ -67,6 +67,7 @@ def main() -> int:
         assert "mode_manager" in status
         assert "stm32_runtime" in status
         assert "error" in status
+        assert "manual" in status
         assert "allowed_next_states" in status
         assert "transition_log" in status["mode_manager"]
 
@@ -92,6 +93,11 @@ def main() -> int:
 
         raw_motor_code, _ = request("/api/drive", "POST", {"speed": 10})
         assert raw_motor_code == 404, "raw motor route must not exist"
+
+        manual_code, manual_raw = request("/api/manual/drive", "POST", {"speed": 999, "steer": 999})
+        assert manual_code == 200, manual_code
+        manual = json.loads(manual_raw.decode("utf-8"))
+        assert manual["accepted"] is False
 
         print("WEB_SHELL_SMOKE PASS")
         return 0

@@ -357,6 +357,8 @@ Features:
 - emergency stop
 - telemetry display
 - obstacle safety
+- raw drive route remains unavailable
+- low-speed first validation limits
 
 Validation:
 
@@ -366,6 +368,16 @@ Hold forward -> repeated CMD:DRIVE
 Release      -> CMD:STOP
 Obstacle     -> forward blocked
 STM32 unplug -> ERROR
+```
+
+Phase 7 implementation files:
+
+```text
+feature_memory/STATE-2_manual_control.md
+pluto_runtime/stm32_link.py
+pluto_runtime/web_shell.py
+tools/manual_state_smoke.py
+tools/web_shell_smoke.py
 ```
 
 ### Phase 8 - ERROR

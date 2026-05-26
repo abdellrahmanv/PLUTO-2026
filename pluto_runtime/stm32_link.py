@@ -54,6 +54,10 @@ class Stm32RuntimeStatus:
     ack_ping_count: int = 0
     stop_count: int = 0
     ack_stop_count: int = 0
+    drive_count: int = 0
+    ack_drive_count: int = 0
+    last_drive_command: str | None = None
+    last_drive_sent: float | None = None
     line_count: int = 0
     telemetry: dict[str, float | str] = field(default_factory=dict)
     obstacles: dict[str, float | str] = field(default_factory=dict)
@@ -110,6 +114,22 @@ class Stm32SerialLink:
             time.sleep(0.01)
         return {"ok": False, "detail": "STOP sent but ACK:STOP not received within 200 ms"}
 
+    def send_drive(self, speed: int, steer: int, wait_ack: bool = True, timeout_s: float = 0.2) -> dict[str, Any]:
+        with self._lock:
+            before = self._status.ack_drive_count
+        command = f"CMD:DRIVE:{int(speed)},{int(steer)}"
+        ok, detail = self.send_command(command)
+        if not ok or not wait_ack:
+            return {"ok": ok, "detail": detail, "command": command}
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._status.ack_drive_count > before:
+                    return {"ok": True, "detail": "ACK:DRIVE", "command": command}
+            time.sleep(0.01)
+        return {"ok": False, "detail": "DRIVE sent but ACK:DRIVE not received within 200 ms", "command": command}
+
     def send_command(self, command: str) -> tuple[bool, str]:
         command = command.strip()
         if not command:
@@ -128,6 +148,10 @@ class Stm32SerialLink:
                     self._pending_ping_sent = time.monotonic()
                 elif command == "CMD:STOP":
                     self._status.stop_count += 1
+                elif command.startswith("CMD:DRIVE:"):
+                    self._status.drive_count += 1
+                    self._status.last_drive_command = command
+                    self._status.last_drive_sent = time.time()
                 return True, "sent"
             except Exception as exc:
                 self._status.error = str(exc)
@@ -211,6 +235,8 @@ class Stm32SerialLink:
                     self._pending_ping_sent = None
             elif line == "ACK:STOP":
                 self._status.ack_stop_count += 1
+            elif line == "ACK:DRIVE":
+                self._status.ack_drive_count += 1
             elif line.startswith("TEL:"):
                 self._status.telemetry = parse_tel_line(line)
             elif line.startswith("OBS:"):
