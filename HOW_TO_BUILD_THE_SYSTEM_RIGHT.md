@@ -240,6 +240,21 @@ Camera disconnected -> clear unavailable message
 Phone/laptop view   -> no layout overlap
 ```
 
+Phase 4 implementation files:
+
+```text
+feature_memory/WEB-002_camera_feed_human_detection.md
+pluto_runtime/camera.py
+pluto_runtime/web_shell.py
+tools/web_shell_smoke.py
+```
+
+Phase 4 command on Raspberry Pi:
+
+```bash
+/home/pi/yolo/env/bin/python -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
+```
+
 ### Phase 5 - Mode Manager
 
 Goal:

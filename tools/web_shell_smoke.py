@@ -63,7 +63,16 @@ def main() -> int:
         assert status["project"] == "PLUTO"
         assert status["current_state"] in {"IDLE", "ERROR", "BOOTSTRAP"}
         assert "stm32" in status["hardware"]
+        assert "camera" in status
         assert "allowed_next_states" in status
+
+        camera_code, raw_camera = request("/api/camera/status")
+        assert camera_code == 200, camera_code
+        camera = json.loads(raw_camera.decode("utf-8"))
+        assert "available" in camera
+
+        jpg_code, _ = request("/camera.jpg")
+        assert jpg_code in {200, 503}, jpg_code
 
         blocked_code, blocked_raw = request("/api/request-state", "POST", {"state": "MANUAL"})
         assert blocked_code == 200, blocked_code

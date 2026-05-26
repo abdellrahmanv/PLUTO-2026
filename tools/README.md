@@ -81,3 +81,22 @@ WEB_SHELL_SMOKE PASS
 
 The website shell displays system state and hardware status, blocks unavailable
 motion states, and exposes emergency stop. It does not expose raw motor routes.
+
+## Phase 4 - Camera Feed And Human Detection
+
+Run the operator console with camera dependencies on the Raspberry Pi:
+
+```bash
+/home/pi/yolo/env/bin/python -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
+```
+
+Useful endpoints:
+
+```text
+/api/camera/status
+/camera.jpg
+/camera.mjpg
+```
+
+The camera service uses threaded capture, frame skipping, MJPG, low resolution,
+YOLOv8n float16 TFLite human detection, and warmup-frame suppression.

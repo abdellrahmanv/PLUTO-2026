@@ -37,4 +37,5 @@ python3 tools/stm32_probe.py
 python3 tools/uno_probe.py
 python3 tools/web_shell_smoke.py
 python3 -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
+/home/pi/yolo/env/bin/python -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
 ```

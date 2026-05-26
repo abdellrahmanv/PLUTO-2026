@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 3 PLUTO operator website shell.
+Phase 4 PLUTO operator website shell.
 
 This is intentionally not the final app. It provides the first safe operator
 console surface: project identity, state/status display, hardware status,
@@ -24,6 +24,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterable
 from urllib.parse import urlparse
+
+from .camera import CameraService, status_to_dict
 
 
 PROJECT_NAME = "PLUTO"
@@ -63,11 +65,21 @@ class PlutoStatus:
     hardware: dict[str, HardwareDevice] = field(default_factory=dict)
     allowed_next_states: list[dict[str, Any]] = field(default_factory=list)
     bootstrap_report: dict[str, Any] = field(default_factory=dict)
+    camera: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
 class PlutoWebContext:
-    def __init__(self, serial_baud: int = 115200) -> None:
+    def __init__(
+        self,
+        serial_baud: int = 115200,
+        camera_device: str | None = None,
+        camera_resolution: tuple[int, int] = (320, 240),
+        camera_fps: int = 30,
+        camera_stream_fps: int = 8,
+        camera_frame_skip: int = 2,
+        yolo_model: str | None = None,
+    ) -> None:
         self.serial_baud = serial_baud
         self.lock = threading.RLock()
         self.events: deque[Event] = deque(maxlen=80)
@@ -79,11 +91,23 @@ class PlutoWebContext:
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
             "uno": HardwareDevice("Uno LCD face controller", False),
-            "camera": HardwareDevice("Camera", False, status="not_implemented", detail="Phase 4"),
+            "camera": HardwareDevice("Camera", False, status="starting", detail="Phase 4"),
             "speaker": HardwareDevice("Speaker", False, status="not_implemented", detail="Future audio phase"),
             "microphone": HardwareDevice("Microphone", False, status="not_implemented", detail="Future speech phase"),
         }
         self.log("info", "PLUTO web shell starting")
+        self.camera_service = CameraService(
+            device=camera_device,
+            resolution=camera_resolution,
+            framerate=camera_fps,
+            stream_fps=camera_stream_fps,
+            frame_skip=camera_frame_skip,
+            model_path=yolo_model,
+        )
+        if self.camera_service.start():
+            self.log("pass", "Camera service started")
+        else:
+            self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
         self.refresh_hardware()
 
     def log(self, level: str, message: str) -> None:
@@ -100,15 +124,28 @@ class PlutoWebContext:
         with self.lock:
             self.hardware["stm32"] = stm32
             self.hardware["uno"] = uno
+            camera_status = self.camera_service.get_status()
+            self.hardware["camera"] = HardwareDevice(
+                "Camera",
+                False,
+                connected=camera_status.available,
+                port=str(camera_status.device) if camera_status.device is not None else None,
+                status="connected" if camera_status.available else "unavailable",
+                detail=camera_status.error or f"{camera_status.backend} {camera_status.resolution}",
+                last_seen=time.time() if camera_status.available else None,
+            )
             self.bootstrap_report = {
-                "phase": "Phase 3 website shell",
+                "phase": "Phase 4 camera feed and human detection",
                 "serial_ports": ports,
                 "required_hardware": {"stm32": asdict(stm32)},
-                "optional_hardware": {"uno": asdict(uno)},
+                "optional_hardware": {
+                    "uno": asdict(uno),
+                    "camera": status_to_dict(camera_status),
+                },
                 "notes": [
                     "Website shell does not enable motion states.",
                     "Emergency stop sends CMD:STOP when STM32 is available.",
-                    "Camera feed begins in Phase 4.",
+                    "Camera feed uses threaded capture, frame skipping, MJPG, low resolution, and warmup suppression.",
                 ],
             }
             if stm32.connected:
@@ -181,6 +218,7 @@ class PlutoWebContext:
                 hardware=hardware,
                 allowed_next_states=build_allowed_states(self.current_state, hardware["stm32"].connected),
                 bootstrap_report=self.bootstrap_report,
+                camera=status_to_dict(self.camera_service.get_status()),
                 events=events,
             )
             return status
@@ -479,6 +517,30 @@ def html_page() -> str:
       font-size: 13px;
     }}
     .event:last-child {{ border-bottom: 0; }}
+    .cameraBox {{
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #101820;
+      margin: 12px 0;
+      display: grid;
+      place-items: center;
+    }}
+    #cameraFeed {{
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }}
+    #cameraUnavailable {{
+      color: #d8e2ea;
+      padding: 16px;
+      text-align: center;
+      font-weight: 700;
+    }}
     pre {{
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -528,8 +590,14 @@ def html_page() -> str:
       </section>
       <section class="span-6">
         <h2>Camera</h2>
-        <div class="metric"><span class="label">Feed</span><span class="value status-warn">Phase 4</span></div>
-        <div class="metric"><span class="label">Status</span><span class="value">unavailable until camera phase</span></div>
+        <div class="cameraBox">
+          <img id="cameraFeed" alt="PLUTO camera feed">
+          <div id="cameraUnavailable">Camera feed unavailable</div>
+        </div>
+        <div class="metric"><span class="label">Status</span><span class="value" id="cameraStatus">...</span></div>
+        <div class="metric"><span class="label">Humans</span><span class="value" id="humanCount">0</span></div>
+        <div class="metric"><span class="label">FPS</span><span class="value" id="cameraFps">0</span></div>
+        <div class="metric"><span class="label">Inference</span><span class="value" id="cameraInference">0 ms</span></div>
       </section>
       <section class="span-12">
         <h2>Events</h2>
@@ -582,6 +650,23 @@ def html_page() -> str:
         return `<div class="event"><span>${{t}}</span><span>${{item.level}}</span><span>${{item.message}}</span></div>`;
       }}).join('');
       document.getElementById('report').textContent = JSON.stringify(data.bootstrap_report, null, 2);
+      const camera = data.camera || {{}};
+      const feed = document.getElementById('cameraFeed');
+      const unavailable = document.getElementById('cameraUnavailable');
+      if (camera.available && camera.running) {{
+        if (!feed.src.includes('/camera.mjpg')) feed.src = '/camera.mjpg';
+        feed.style.display = 'block';
+        unavailable.style.display = 'none';
+      }} else {{
+        feed.removeAttribute('src');
+        feed.style.display = 'none';
+        unavailable.style.display = 'grid';
+        unavailable.textContent = camera.error || 'Camera feed unavailable';
+      }}
+      document.getElementById('cameraStatus').textContent = camera.running ? `${{camera.backend}} ${{camera.resolution}}` : (camera.error || 'unavailable');
+      document.getElementById('humanCount').textContent = camera.human_count || 0;
+      document.getElementById('cameraFps').textContent = `${{(camera.stream_fps || 0).toFixed(1)}} stream / ${{(camera.capture_fps || 0).toFixed(1)}} capture`;
+      document.getElementById('cameraInference').textContent = `${{(camera.inference_ms || 0).toFixed(1)}} ms`;
     }}
     async function refresh() {{
       try {{ render(await api('/api/status')); }}
@@ -647,6 +732,33 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self.send_json(HTTPStatus.OK, self.context.snapshot())
             return
+        if path == "/api/camera/status":
+            self.send_json(HTTPStatus.OK, self.context.snapshot().camera)
+            return
+        if path == "/camera.jpg":
+            frame = self.context.camera_service.get_jpeg()
+            if frame is None:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera frame unavailable"})
+                return
+            self.send_bytes(HTTPStatus.OK, frame, "image/jpeg")
+            return
+        if path == "/camera.mjpg":
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Age", "0")
+            self.send_header("Cache-Control", "no-cache, private")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            for frame in self.context.camera_service.stream_frames():
+                try:
+                    self.wfile.write(b"--frame\r\n")
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
+                    self.wfile.write(frame)
+                    self.wfile.write(b"\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+            return
         if path == "/healthz":
             self.send_json(HTTPStatus.OK, {"ok": True, "project": PROJECT_NAME})
             return
@@ -696,16 +808,42 @@ def local_addresses(port: int) -> list[str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Phase 3 PLUTO operator website shell.")
+    parser = argparse.ArgumentParser(description="Run the Phase 4 PLUTO operator website shell.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host. Use 0.0.0.0 on Raspberry Pi.")
     parser.add_argument("--port", type=int, default=8080, help="Bind port. Default: 8080.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud for hardware probes.")
+    parser.add_argument("--camera-device", help="Camera device, for example /dev/video0.")
+    parser.add_argument("--camera-resolution", default="320x240", help="Capture resolution WIDTHxHEIGHT. Default: 320x240.")
+    parser.add_argument("--camera-fps", type=int, default=30, help="Requested camera FPS. Default: 30.")
+    parser.add_argument("--camera-stream-fps", type=int, default=8, help="MJPEG stream FPS. Default: 8.")
+    parser.add_argument("--camera-frame-skip", type=int, default=2, help="Run human detection every Nth frame. Default: 2.")
+    parser.add_argument("--yolo-model", help="TFLite YOLO model path. Defaults to PLUTO_YOLO_MODEL or /home/pi/yolo/model/yolov8n-fp16.tflite.")
     return parser.parse_args(argv)
+
+
+def parse_resolution(value: str) -> tuple[int, int]:
+    try:
+        left, right = value.lower().split("x", 1)
+        width = int(left)
+        height = int(right)
+    except Exception as exc:
+        raise argparse.ArgumentTypeError("resolution must look like WIDTHxHEIGHT, for example 320x240") from exc
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("resolution dimensions must be positive")
+    return width, height
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    context = PlutoWebContext(serial_baud=args.baud)
+    context = PlutoWebContext(
+        serial_baud=args.baud,
+        camera_device=args.camera_device,
+        camera_resolution=parse_resolution(args.camera_resolution),
+        camera_fps=args.camera_fps,
+        camera_stream_fps=args.camera_stream_fps,
+        camera_frame_skip=args.camera_frame_skip,
+        yolo_model=args.yolo_model,
+    )
     server = PlutoWebServer((args.host, args.port), PlutoRequestHandler, context)
     print(f"PLUTO web shell running on {args.host}:{args.port}")
     for address in local_addresses(args.port):
