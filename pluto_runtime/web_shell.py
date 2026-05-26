@@ -211,7 +211,8 @@ class PlutoWebContext:
         return {"accepted": True, "stop": stop, "transition": result.to_dict(), "state": result.current_state}
 
     def reset_error(self) -> dict[str, Any]:
-        self.refresh_hardware()
+        if not self.hardware["stm32"].connected:
+            self.refresh_hardware()
         result = self.mode_manager.request_transition(
             "IDLE",
             self.safety_context(),

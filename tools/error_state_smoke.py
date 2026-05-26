@@ -24,7 +24,7 @@ def request(path: str, method: str = "GET", payload: dict | None = None) -> tupl
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=4) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
