@@ -331,6 +331,16 @@ Website shows IDLE
 Obstacle values update
 ```
 
+Phase 6 implementation files:
+
+```text
+feature_memory/STATE-1_idle_runtime.md
+pluto_runtime/stm32_link.py
+pluto_runtime/web_shell.py
+tools/idle_runtime_smoke.py
+tools/web_shell_smoke.py
+```
+
 ### Phase 7 - MANUAL
 
 Goal:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 5 PLUTO operator website shell.
+Phase 6 PLUTO operator website shell.
 
 This is intentionally not the final app. It provides the first safe operator
 console surface: project identity, state/status display, hardware status,
@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 from .camera import CameraService, status_to_dict
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
+from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 
 
 PROJECT_NAME = "PLUTO"
@@ -66,6 +67,7 @@ class PlutoStatus:
     bootstrap_report: dict[str, Any] = field(default_factory=dict)
     camera: dict[str, Any] = field(default_factory=dict)
     mode_manager: dict[str, Any] = field(default_factory=dict)
+    stm32_runtime: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
@@ -87,6 +89,7 @@ class PlutoWebContext:
         self.events: deque[Event] = deque(maxlen=80)
         self.started_at = time.time()
         self.mode_manager = ModeManager()
+        self.stm32_link: Stm32SerialLink | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
@@ -117,6 +120,7 @@ class PlutoWebContext:
             self.events.appendleft(Event(time.time(), level, message))
 
     def refresh_hardware(self) -> None:
+        self.stop_stm32_link()
         ports = candidate_ports()
         self.log("info", f"Scanning serial ports: {', '.join(ports) if ports else 'none'}")
 
@@ -137,7 +141,7 @@ class PlutoWebContext:
                 last_seen=time.time() if camera_status.available else None,
             )
             self.bootstrap_report = {
-                "phase": "Phase 4 camera feed and human detection",
+                "phase": "Phase 6 IDLE runtime baseline",
                 "serial_ports": ports,
                 "required_hardware": {"stm32": asdict(stm32)},
                 "optional_hardware": {
@@ -147,20 +151,37 @@ class PlutoWebContext:
                 "notes": [
                     "Website shell does not enable motion states.",
                     "Emergency stop sends CMD:STOP when STM32 is available.",
+                    "IDLE runtime keeps STM32 heartbeat alive when connected.",
                     "Camera feed uses threaded capture, frame skipping, MJPG, low resolution, and warmup suppression.",
                 ],
             }
             if stm32.connected:
                 self.mode_manager.bootstrap_complete(True, "required hardware available")
                 self.log("pass", f"STM32 detected on {stm32.port}")
+                self.start_stm32_link(stm32.port)
             else:
                 self.mode_manager.bootstrap_complete(False, "STM32 motor safety controller missing")
                 self.log("error", "STM32 motor safety controller missing")
 
+    def start_stm32_link(self, port: str | None) -> None:
+        if not port:
+            return
+        self.stop_stm32_link()
+        link = Stm32SerialLink(port=port, baud=self.serial_baud, heartbeat_interval_s=0.4)
+        link.start()
+        self.stm32_link = link
+        self.log("pass", f"IDLE STM32 heartbeat link started on {port}")
+
+    def stop_stm32_link(self) -> None:
+        link = self.stm32_link
+        self.stm32_link = None
+        if link is not None:
+            link.stop()
+
     def emergency_stop(self) -> dict[str, Any]:
         started = time.monotonic()
         stm32 = self.hardware["stm32"]
-        stop = send_stm32_stop(stm32.port, self.serial_baud) if stm32.port else {"ok": False, "detail": "STM32 port unknown"}
+        stop = self.send_stm32_stop_safe(stm32.port)
         elapsed_ms = (time.monotonic() - started) * 1000.0
 
         with self.lock:
@@ -174,6 +195,11 @@ class PlutoWebContext:
             "state": result.current_state,
             "transition": result.to_dict(),
         }
+
+    def send_stm32_stop_safe(self, port: str | None) -> dict[str, Any]:
+        if self.stm32_link is not None:
+            return self.stm32_link.send_stop()
+        return send_stm32_stop(port, self.serial_baud) if port else {"ok": False, "detail": "STM32 port unknown"}
 
     def safety_context(self, operator_request: bool = False, welcome_trigger_confirmed: bool = False) -> SafetyContext:
         stm32 = self.hardware["stm32"]
@@ -209,7 +235,7 @@ class PlutoWebContext:
         stop_result: dict[str, Any] | None = None
         if result.accepted and result.requires_stop:
             stm32 = self.hardware["stm32"]
-            stop_result = send_stm32_stop(stm32.port, self.serial_baud) if stm32.port else {"ok": False, "detail": "STM32 port unknown"}
+            stop_result = self.send_stm32_stop_safe(stm32.port)
             self.log("stop", f"Transition stop guard for {requested_state}: {stop_result['detail']}")
 
         level = "pass" if result.accepted else "warn"
@@ -236,6 +262,7 @@ class PlutoWebContext:
             hardware = {key: value for key, value in self.hardware.items()}
             events = list(self.events)
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
+            stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
             status = PlutoStatus(
                 current_state=mode_snapshot["current_state"],
                 current_substate=mode_snapshot["current_substate"],
@@ -247,6 +274,7 @@ class PlutoWebContext:
                 bootstrap_report=self.bootstrap_report,
                 camera=status_to_dict(self.camera_service.get_status()),
                 mode_manager=mode_snapshot,
+                stm32_runtime=stm32_runtime,
                 events=events,
             )
             return status
@@ -601,6 +629,14 @@ def html_page() -> str:
         </div>
       </section>
       <section class="span-6">
+        <h2>STM32 Runtime</h2>
+        <div class="metric"><span class="label">Heartbeat</span><span class="value" id="stmHeartbeat">...</span></div>
+        <div class="metric"><span class="label">Ping Latency</span><span class="value" id="stmPing">...</span></div>
+        <div class="metric"><span class="label">Telemetry</span><span class="value" id="stmTel">...</span></div>
+        <div class="metric"><span class="label">Obstacles</span><span class="value" id="stmObs">...</span></div>
+        <div class="metric"><span class="label">Last Line</span><span class="value" id="stmLine">...</span></div>
+      </section>
+      <section class="span-6">
         <h2>Camera</h2>
         <div class="cameraBox">
           <img id="cameraFeed" alt="PLUTO camera feed">
@@ -663,6 +699,12 @@ def html_page() -> str:
         return `<div class="event"><span>${{t}}</span><span>${{item.level}}</span><span>${{item.message}}</span></div>`;
       }}).join('');
       document.getElementById('report').textContent = JSON.stringify(data.bootstrap_report, null, 2);
+      const stm = data.stm32_runtime || {{}};
+      document.getElementById('stmHeartbeat').textContent = stm.running ? `${{stm.ack_ping_count || 0}} ACK / ${{stm.ping_count || 0}} PING` : 'not running';
+      document.getElementById('stmPing').textContent = stm.last_ping_latency_ms == null ? 'none' : `${{stm.last_ping_latency_ms.toFixed(1)}} ms`;
+      document.getElementById('stmTel').textContent = stm.telemetry ? JSON.stringify(stm.telemetry) : '{{}}';
+      document.getElementById('stmObs').textContent = stm.obstacles ? JSON.stringify(stm.obstacles) : '{{}}';
+      document.getElementById('stmLine').textContent = stm.last_line || stm.error || 'none';
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -827,7 +869,7 @@ def local_addresses(port: int) -> list[str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Phase 5 PLUTO operator website shell.")
+    parser = argparse.ArgumentParser(description="Run the Phase 6 PLUTO operator website shell.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host. Use 0.0.0.0 on Raspberry Pi.")
     parser.add_argument("--port", type=int, default=8080, help="Bind port. Default: 8080.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud for hardware probes.")
@@ -876,6 +918,7 @@ def main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         print("\nStopping PLUTO web shell")
     finally:
+        context.stop_stm32_link()
         server.server_close()
     return 0
 

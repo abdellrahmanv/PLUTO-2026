@@ -65,6 +65,7 @@ def main() -> int:
         assert "stm32" in status["hardware"]
         assert "camera" in status
         assert "mode_manager" in status
+        assert "stm32_runtime" in status
         assert "allowed_next_states" in status
         assert "transition_log" in status["mode_manager"]
 
