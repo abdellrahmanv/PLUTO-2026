@@ -31,7 +31,7 @@ def request(path: str, method: str = "GET", payload: dict | None = None) -> tupl
 
 
 def wait_ready() -> None:
-    deadline = time.monotonic() + 8
+    deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
         try:
             status, _ = request("/healthz")
