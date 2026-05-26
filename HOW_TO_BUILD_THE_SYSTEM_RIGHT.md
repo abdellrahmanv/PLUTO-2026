@@ -122,6 +122,20 @@ Uno also connected -> still chooses STM32 correctly
 CMD:PING           -> ACK within 100 ms
 ```
 
+Phase 1 implementation files:
+
+```text
+feature_memory/IF-STM32-001_stm32_serial_probe.md
+tools/stm32_probe.py
+tools/README.md
+```
+
+Phase 1 command:
+
+```bash
+python3 tools/stm32_probe.py
+```
+
 ### Phase 2 - Uno Serial Validation
 
 Goal:
@@ -451,4 +465,3 @@ traceable, and predictable.
 
 Build the spine first. Then the senses. Then the face. Then motion. Then
 personality.
-

@@ -1,0 +1,31 @@
+# Pluto Tools
+
+This folder contains standalone validation tools. Tools must prove one feature
+at a time and must stay safe by default.
+
+## Phase 1 - STM32 Serial Validation
+
+Run from the repository root on the Raspberry Pi or development laptop:
+
+```bash
+python3 tools/stm32_probe.py
+```
+
+If the auto-scan finds the wrong port, run with an explicit port:
+
+```bash
+python3 tools/stm32_probe.py --port /dev/ttyACM0
+```
+
+Expected pass evidence:
+
+```text
+PHASE 1 RESULT: PASS
+ACK:PING latency <= 100 ms
+STOP ACK: PASS
+TEL line present
+OBS line present
+```
+
+The tool never sends `CMD:DRIVE`, `CMD:ARM`, `CMD:RETURN`, or any other motion
+command. It sends only `CMD:PING` and `CMD:STOP`.
