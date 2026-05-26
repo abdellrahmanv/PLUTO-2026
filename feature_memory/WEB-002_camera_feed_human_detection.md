@@ -1,10 +1,10 @@
 # Feature Memory: Camera Feed And Human Detection
 
-Status: implemented, awaiting full browser/FPS validation on Raspberry Pi
+Status: implemented, validated by system engineering review for Phase 4
 
 Last updated: 2026-05-27
 
-Last validated: not yet validated in browser with human target
+Last validated: 2026-05-27 by system engineering reviewer
 
 Owner: Pluto systems engineering
 
@@ -225,7 +225,7 @@ GET /camera.mjpg -> multipart MJPEG stream
 | VER-WEB-009 | Open on phone viewport | Camera panel does not overlap controls | not run in browser |
 | PHASE4-CAMERA-API | Call `/api/camera/status` | JSON contains camera availability/FPS/human count | local smoke pass |
 | PHASE4-JPEG | Call `/camera.jpg` | `200 image/jpeg` when camera running, `503` when unavailable | local smoke pass for endpoint behavior |
-| PHASE4-HUMAN | Stand in front of camera | `human_count >= 1` | not run with human target |
+| PHASE4-HUMAN | Stand in front of camera | `human_count >= 1` | validated by reviewer during Phase 4 |
 
 ## Failure Modes
 
@@ -244,6 +244,10 @@ Phase 4 is perception only. It does not command motion and does not enable
 WELCOME targeting yet. Human detections are displayed for operator visibility
 only until the WELCOME state requirements are implemented and verified.
 
+Wave detection is intentionally not part of Phase 4 closure. A wave can trigger
+WELCOME and later cause approach behavior, so it belongs to the WELCOME trigger
+feature gate instead of the camera preview gate.
+
 ## Open Questions
 
 - Should the YOLO model be copied into this repo or remain an external runtime
@@ -257,3 +261,5 @@ only until the WELCOME state requirements are implemented and verified.
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-05-27 | Initial implementation memory | Phase 4 initiated from prior YOLO optimization repo |
+| 2026-05-27 | Phase 4 validated by reviewer | Camera feed and human detection accepted as Phase 4 baseline |
+| 2026-05-27 | Wave detection deferred from Phase 4 | Wave detection is a WELCOME trigger feature with motion safety impact |

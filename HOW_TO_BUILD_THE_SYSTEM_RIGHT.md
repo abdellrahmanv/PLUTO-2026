@@ -249,6 +249,14 @@ pluto_runtime/web_shell.py
 tools/web_shell_smoke.py
 ```
 
+Phase 4 closure decision:
+
+```text
+Phase 4 is done when camera feed and human presence are visible and stable.
+Wave detection is not part of Phase 4. It is a WELCOME trigger feature because
+it can request a state transition that later leads to approach motion.
+```
+
 Phase 4 command on Raspberry Pi:
 
 ```bash
@@ -375,6 +383,7 @@ Pluto approaches a confirmed person, greets, talks simply, and returns safely.
 Features:
 
 - confirmed trigger
+- wave trigger detection
 - target selection
 - approach
 - obstacle handling
@@ -388,12 +397,19 @@ Validation:
 
 ```text
 Trigger WELCOME      -> target selected
+Wave trigger         -> confirmed intent event, no direct motion
 Approach             -> bounded motion
 Obstacle             -> stop/request space
 Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
 Return               -> other modes blocked
 Return complete      -> IDLE
+```
+
+WELCOME wave trigger memory:
+
+```text
+feature_memory/STATE-3.12_welcome_wave_trigger_detection.md
 ```
 
 ### Phase 10 - DANCE

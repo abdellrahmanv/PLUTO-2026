@@ -700,6 +700,12 @@ WELCOME_DONE
 | STATE-3.10 | WELCOME trigger shall be based on confirmed human intent, not a single noisy frame. | Pi | Debounce log |
 | STATE-3.11 | WELCOME v1 may use operator/web trigger instead of full vision wave detection. | Pi | Manual trigger test |
 | STATE-3.12 | Future wave detection shall require multiple frames above confidence threshold. | Pi | Vision test |
+| STATE-3.12.1 | Wave detection shall not directly command wheels or arm movement. | Pi | Command log |
+| STATE-3.12.2 | Wave detection shall only request WELCOME entry through the mode manager. | Pi | Mode log |
+| STATE-3.12.3 | Wave detection shall require a raised wrist and side-to-side motion pattern before confirming intent. | Pi | Vision debug log |
+| STATE-3.12.4 | Wave detection shall use a confirmation window and cooldown to prevent rapid repeat triggers. | Pi | Trigger debounce test |
+| STATE-3.12.5 | Wave detection shall expose debug evidence: target ID, side, score, confidence, and confirmation reason. | Pi | Debug log review |
+| STATE-3.12.6 | If pose or wave dependencies are unavailable, WELCOME shall fall back to operator/web trigger. | Pi | Missing dependency test |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |
