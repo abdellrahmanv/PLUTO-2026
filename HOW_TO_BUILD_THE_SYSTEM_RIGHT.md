@@ -279,6 +279,9 @@ Features:
 - allowed transitions
 - blocked transitions
 - transition logs
+- stop guard requirements
+- return lock gate
+- error reset gate
 
 Validation:
 
@@ -288,6 +291,16 @@ STM32 missing    -> ERROR or reduced safe state
 IDLE -> MANUAL   -> allowed when safe
 ERROR -> DANCE   -> blocked
 WELCOME_RETURN   -> blocks all normal modes
+```
+
+Phase 5 implementation files:
+
+```text
+feature_memory/STATE-CORE-001_mode_manager.md
+pluto_runtime/mode_manager.py
+pluto_runtime/web_shell.py
+tools/mode_manager_smoke.py
+tools/web_shell_smoke.py
 ```
 
 ### Phase 6 - IDLE

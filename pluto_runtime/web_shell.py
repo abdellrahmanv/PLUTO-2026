@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 4 PLUTO operator website shell.
+Phase 5 PLUTO operator website shell.
 
 This is intentionally not the final app. It provides the first safe operator
 console surface: project identity, state/status display, hardware status,
@@ -26,13 +26,12 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from .camera import CameraService, status_to_dict
+from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 
 
 PROJECT_NAME = "PLUTO"
 STM32_ID = "ID:STM32_MOTOR"
 UNO_ID = "ID:UNO_LCD"
-VALID_STATES = ("BOOTSTRAP", "IDLE", "MANUAL", "WELCOME", "DANCE", "ERROR", "GAME_LATER")
-MOTION_STATES = {"MANUAL", "WELCOME", "DANCE"}
 
 
 @dataclass
@@ -66,6 +65,7 @@ class PlutoStatus:
     allowed_next_states: list[dict[str, Any]] = field(default_factory=list)
     bootstrap_report: dict[str, Any] = field(default_factory=dict)
     camera: dict[str, Any] = field(default_factory=dict)
+    mode_manager: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
@@ -86,9 +86,7 @@ class PlutoWebContext:
         self.lock = threading.RLock()
         self.events: deque[Event] = deque(maxlen=80)
         self.started_at = time.time()
-        self.current_state = "BOOTSTRAP"
-        self.current_substate = "WEB_SHELL"
-        self.fault_reason: str | None = None
+        self.mode_manager = ModeManager()
         self.git_commit = read_git_commit()
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
@@ -153,13 +151,11 @@ class PlutoWebContext:
                 ],
             }
             if stm32.connected:
-                self.current_state = "IDLE"
-                self.fault_reason = None
+                self.mode_manager.bootstrap_complete(True, "required hardware available")
                 self.log("pass", f"STM32 detected on {stm32.port}")
             else:
-                self.current_state = "ERROR"
-                self.fault_reason = "STM32 motor safety controller missing"
-                self.log("error", self.fault_reason)
+                self.mode_manager.bootstrap_complete(False, "STM32 motor safety controller missing")
+                self.log("error", "STM32 motor safety controller missing")
 
     def emergency_stop(self) -> dict[str, Any]:
         started = time.monotonic()
@@ -168,33 +164,59 @@ class PlutoWebContext:
         elapsed_ms = (time.monotonic() - started) * 1000.0
 
         with self.lock:
-            self.current_state = "ERROR"
-            self.fault_reason = "Emergency stop requested from website"
+            result = self.mode_manager.enter_error("Emergency stop requested from website", source="website")
             self.log("stop", f"Emergency stop requested, serial result: {stop['detail']}")
 
         return {
             "ok": bool(stop["ok"]),
             "elapsed_ms": elapsed_ms,
             "serial": stop,
-            "state": "ERROR",
+            "state": result.current_state,
+            "transition": result.to_dict(),
         }
 
-    def request_state(self, requested_state: str) -> dict[str, Any]:
+    def safety_context(self, operator_request: bool = False, welcome_trigger_confirmed: bool = False) -> SafetyContext:
+        stm32 = self.hardware["stm32"]
+        return SafetyContext(
+            stm32_available=stm32.connected,
+            battery_critical=False,
+            motion_intent_zero=True,
+            welcome_trigger_confirmed=welcome_trigger_confirmed,
+            operator_request=operator_request,
+            return_lock=self.mode_manager.return_lock,
+            fault_active=False,
+            fault_reason=self.mode_manager.fault_reason,
+        )
+
+    def request_state(self, requested_state: str, reset_fault: bool = False) -> dict[str, Any]:
         requested_state = requested_state.strip().upper()
         if requested_state not in VALID_STATES:
             self.log("warn", f"Rejected unknown state request: {requested_state}")
             return {"accepted": False, "reason": "unknown state"}
 
-        reason = "Phase 5 mode manager is not implemented yet"
-        if requested_state in MOTION_STATES and not self.hardware["stm32"].connected:
-            reason = "STM32 unavailable; motion states are blocked"
-        elif requested_state in MOTION_STATES:
-            reason = f"{requested_state} is blocked until its own phase is validated"
-        elif requested_state == "GAME_LATER":
-            reason = "GAME_LATER is documented but not implemented in v1"
+        context = self.safety_context(
+            operator_request=True,
+            welcome_trigger_confirmed=requested_state == "WELCOME",
+        )
+        result = self.mode_manager.request_transition(
+            requested_state,
+            context,
+            source="website",
+            reason=f"website requested {requested_state}",
+            reset_fault=reset_fault,
+        )
 
-        self.log("info", f"State request {requested_state} blocked: {reason}")
-        return {"accepted": False, "requested_state": requested_state, "reason": reason}
+        stop_result: dict[str, Any] | None = None
+        if result.accepted and result.requires_stop:
+            stm32 = self.hardware["stm32"]
+            stop_result = send_stm32_stop(stm32.port, self.serial_baud) if stm32.port else {"ok": False, "detail": "STM32 port unknown"}
+            self.log("stop", f"Transition stop guard for {requested_state}: {stop_result['detail']}")
+
+        level = "pass" if result.accepted else "warn"
+        self.log(level, f"State request {requested_state}: {result.reason}")
+        payload = result.to_dict()
+        payload["stop_guard"] = stop_result
+        return payload
 
     def shutdown(self, confirm: str | None) -> dict[str, Any]:
         if confirm != "PLUTO SHUTDOWN":
@@ -213,16 +235,18 @@ class PlutoWebContext:
         with self.lock:
             hardware = {key: value for key, value in self.hardware.items()}
             events = list(self.events)
+            mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             status = PlutoStatus(
-                current_state=self.current_state,
-                current_substate=self.current_substate,
-                fault_reason=self.fault_reason,
+                current_state=mode_snapshot["current_state"],
+                current_substate=mode_snapshot["current_substate"],
+                fault_reason=mode_snapshot["fault_reason"],
                 git_commit=self.git_commit,
                 started_at=self.started_at,
                 hardware=hardware,
-                allowed_next_states=build_allowed_states(self.current_state, hardware["stm32"].connected),
+                allowed_next_states=mode_snapshot["allowed_next_states"],
                 bootstrap_report=self.bootstrap_report,
                 camera=status_to_dict(self.camera_service.get_status()),
+                mode_manager=mode_snapshot,
                 events=events,
             )
             return status
@@ -381,23 +405,6 @@ def send_stm32_stop(port: str | None, baud: int) -> dict[str, Any]:
             return {"ok": False, "detail": "STOP sent but ACK:STOP not received within 150 ms", "lines": lines}
     except Exception as exc:
         return {"ok": False, "detail": str(exc)}
-
-
-def build_allowed_states(current_state: str, stm32_connected: bool) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for state in VALID_STATES:
-        allowed = False
-        reason = "Mode manager begins in Phase 5"
-        if state == current_state:
-            reason = "current state"
-        elif state in MOTION_STATES and not stm32_connected:
-            reason = "blocked because STM32 is unavailable"
-        elif state in MOTION_STATES:
-            reason = f"blocked until {state} phase is validated"
-        elif state == "GAME_LATER":
-            reason = "documented for later, not v1"
-        rows.append({"state": state, "allowed": allowed, "reason": reason})
-    return rows
 
 
 def encode_json(data: Any) -> bytes:
@@ -578,6 +585,7 @@ def html_page() -> str:
         <div class="metric"><span class="label">Current</span><span class="value" id="state">...</span></div>
         <div class="metric"><span class="label">Substate</span><span class="value" id="substate">...</span></div>
         <div class="metric"><span class="label">Fault</span><span class="value" id="fault">none</span></div>
+        <div class="metric"><span class="label">Return Lock</span><span class="value" id="returnLock">false</span></div>
         <div class="metric"><span class="label">Commit</span><span class="value" id="commit">...</span></div>
       </section>
       <section class="span-8">
@@ -629,6 +637,7 @@ def html_page() -> str:
       document.getElementById('state').textContent = data.current_state;
       document.getElementById('substate').textContent = data.current_substate || 'none';
       document.getElementById('fault').textContent = data.fault_reason || 'none';
+      document.getElementById('returnLock').textContent = data.mode_manager && data.mode_manager.return_lock ? 'true' : 'false';
       document.getElementById('commit').textContent = data.git_commit || 'unknown';
       const hardware = document.getElementById('hardware');
       hardware.innerHTML = Object.entries(data.hardware).map(([key, item]) => `
@@ -688,7 +697,7 @@ def html_page() -> str:
       await api('/api/request-state', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{state: btn.dataset.state}})
+        body: JSON.stringify({{state: btn.dataset.state, reset_fault: btn.dataset.state === 'IDLE'}})
       }});
       await refresh();
     }}));
@@ -780,7 +789,13 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/request-state":
                 body = self.read_json()
-                self.send_json(HTTPStatus.OK, self.context.request_state(str(body.get("state", ""))))
+                self.send_json(
+                    HTTPStatus.OK,
+                    self.context.request_state(
+                        str(body.get("state", "")),
+                        bool(body.get("reset_fault", False)),
+                    ),
+                )
                 return
             if path == "/api/shutdown":
                 body = self.read_json()
@@ -812,7 +827,7 @@ def local_addresses(port: int) -> list[str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Phase 4 PLUTO operator website shell.")
+    parser = argparse.ArgumentParser(description="Run the Phase 5 PLUTO operator website shell.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host. Use 0.0.0.0 on Raspberry Pi.")
     parser.add_argument("--port", type=int, default=8080, help="Bind port. Default: 8080.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud for hardware probes.")

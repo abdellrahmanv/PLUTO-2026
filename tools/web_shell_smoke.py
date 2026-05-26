@@ -64,7 +64,9 @@ def main() -> int:
         assert status["current_state"] in {"IDLE", "ERROR", "BOOTSTRAP"}
         assert "stm32" in status["hardware"]
         assert "camera" in status
+        assert "mode_manager" in status
         assert "allowed_next_states" in status
+        assert "transition_log" in status["mode_manager"]
 
         camera_code, raw_camera = request("/api/camera/status")
         assert camera_code == 200, camera_code
@@ -74,10 +76,11 @@ def main() -> int:
         jpg_code, _ = request("/camera.jpg")
         assert jpg_code in {200, 503}, jpg_code
 
-        blocked_code, blocked_raw = request("/api/request-state", "POST", {"state": "MANUAL"})
+        blocked_code, blocked_raw = request("/api/request-state", "POST", {"state": "GAME_LATER"})
         assert blocked_code == 200, blocked_code
         blocked = json.loads(blocked_raw.decode("utf-8"))
         assert blocked["accepted"] is False
+        assert "GAME_LATER" in blocked["requested_state"]
 
         estop_code, estop_raw = request("/api/emergency-stop", "POST")
         assert estop_code == 200, estop_code
