@@ -385,6 +385,8 @@ Features:
 - recovery path
 - website fault display
 - Uno warning display
+- diagnostic fault injection
+- critical alert escalation
 
 Validation:
 
@@ -393,6 +395,16 @@ Emergency stop -> ERROR
 STM32 unplug   -> ERROR
 Try DANCE      -> blocked
 Fault cleared  -> reset allowed back to IDLE
+```
+
+Phase 8 implementation files:
+
+```text
+feature_memory/STATE-5_error_state.md
+pluto_runtime/mode_manager.py
+pluto_runtime/web_shell.py
+tools/error_state_smoke.py
+tools/web_shell_smoke.py
 ```
 
 ### Phase 9 - WELCOME

@@ -68,6 +68,7 @@ class PlutoStatus:
     camera: dict[str, Any] = field(default_factory=dict)
     mode_manager: dict[str, Any] = field(default_factory=dict)
     stm32_runtime: dict[str, Any] = field(default_factory=dict)
+    error: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
@@ -90,6 +91,7 @@ class PlutoWebContext:
         self.started_at = time.time()
         self.mode_manager = ModeManager()
         self.stm32_link: Stm32SerialLink | None = None
+        self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
@@ -156,12 +158,16 @@ class PlutoWebContext:
                 ],
             }
             if stm32.connected:
-                self.mode_manager.bootstrap_complete(True, "required hardware available")
                 self.log("pass", f"STM32 detected on {stm32.port}")
                 self.start_stm32_link(stm32.port)
+                if self.mode_manager.current_state == "BOOTSTRAP":
+                    self.mode_manager.bootstrap_complete(True, "required hardware available")
             else:
-                self.mode_manager.bootstrap_complete(False, "STM32 motor safety controller missing")
                 self.log("error", "STM32 motor safety controller missing")
+                if self.mode_manager.current_state == "BOOTSTRAP":
+                    self.mode_manager.bootstrap_complete(False, "STM32 motor safety controller missing")
+                elif self.mode_manager.current_state != "ERROR":
+                    self.mode_manager.enter_error("STM32 motor safety controller missing", source="hardware_refresh")
 
     def start_stm32_link(self, port: str | None) -> None:
         if not port:
@@ -195,6 +201,32 @@ class PlutoWebContext:
             "state": result.current_state,
             "transition": result.to_dict(),
         }
+
+    def inject_fault(self, reason: str, source: str = "diagnostic") -> dict[str, Any]:
+        clean_reason = reason.strip() or "diagnostic fault injection"
+        stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+        with self.lock:
+            result = self.mode_manager.enter_error(clean_reason, source=source)
+            self.log("error", f"Fault injected: {clean_reason}; stop result: {stop['detail']}")
+        return {"accepted": True, "stop": stop, "transition": result.to_dict(), "state": result.current_state}
+
+    def reset_error(self) -> dict[str, Any]:
+        self.refresh_hardware()
+        result = self.mode_manager.request_transition(
+            "IDLE",
+            self.safety_context(),
+            source="website",
+            reason="operator requested ERROR reset",
+            reset_fault=True,
+        )
+        stop_result: dict[str, Any] | None = None
+        if result.accepted and result.requires_stop:
+            stop_result = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+            self.log("stop", f"ERROR reset stop guard: {stop_result['detail']}")
+        self.log("pass" if result.accepted else "warn", f"ERROR reset: {result.reason}")
+        payload = result.to_dict()
+        payload["stop_guard"] = stop_result
+        return payload
 
     def send_stm32_stop_safe(self, port: str | None) -> dict[str, Any]:
         if self.stm32_link is not None:
@@ -263,6 +295,8 @@ class PlutoWebContext:
             events = list(self.events)
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
+            self.escalate_critical_alert_if_needed(stm32_runtime)
+            mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             status = PlutoStatus(
                 current_state=mode_snapshot["current_state"],
                 current_substate=mode_snapshot["current_substate"],
@@ -275,9 +309,50 @@ class PlutoWebContext:
                 camera=status_to_dict(self.camera_service.get_status()),
                 mode_manager=mode_snapshot,
                 stm32_runtime=stm32_runtime,
+                error=self.error_status(mode_snapshot, stm32_runtime),
                 events=events,
             )
             return status
+
+    def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
+        in_error = mode_snapshot["current_state"] == "ERROR"
+        stm32_available = self.hardware["stm32"].connected
+        return {
+            "active": in_error,
+            "fault_reason": mode_snapshot.get("fault_reason"),
+            "previous_state": self.previous_state_before_error(mode_snapshot),
+            "recovery_action": self.recovery_action(in_error, stm32_available),
+            "stm32_available": stm32_available,
+            "last_alert": (stm32_runtime.get("alerts") or [None])[0],
+        }
+
+    def previous_state_before_error(self, mode_snapshot: dict[str, Any]) -> str | None:
+        for item in reversed(mode_snapshot.get("transition_log", [])):
+            if item.get("next_state") == "ERROR" and item.get("accepted"):
+                return item.get("previous_state")
+        return None
+
+    @staticmethod
+    def recovery_action(in_error: bool, stm32_available: bool) -> str:
+        if not in_error:
+            return "No active fault"
+        if stm32_available:
+            return "Inspect fault, confirm motors are safe, then press Reset To IDLE"
+        return "Reconnect STM32, refresh hardware, then reset"
+
+    def escalate_critical_alert_if_needed(self, stm32_runtime: dict[str, Any]) -> None:
+        alerts = stm32_runtime.get("alerts") or []
+        if not alerts or self.mode_manager.current_state == "ERROR":
+            return
+        alert = str(alerts[0])
+        critical_tokens = ("CRITICAL", "FAULT", "TIMEOUT", "ESTOP", "LOW_BAT", "DISCONNECT")
+        if alert == self.last_alert_escalated:
+            return
+        if any(token in alert.upper() for token in critical_tokens):
+            self.last_alert_escalated = alert
+            stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+            result = self.mode_manager.enter_error(f"STM32 critical alert: {alert}", source="stm32_alert")
+            self.log("error", f"Critical alert escalated to ERROR: {alert}; stop result: {stop['detail']}; {result.reason}")
 
 
 def read_git_commit() -> str:
@@ -613,12 +688,17 @@ def html_page() -> str:
         <div class="metric"><span class="label">Current</span><span class="value" id="state">...</span></div>
         <div class="metric"><span class="label">Substate</span><span class="value" id="substate">...</span></div>
         <div class="metric"><span class="label">Fault</span><span class="value" id="fault">none</span></div>
+        <div class="metric"><span class="label">Recovery</span><span class="value" id="recovery">none</span></div>
         <div class="metric"><span class="label">Return Lock</span><span class="value" id="returnLock">false</span></div>
         <div class="metric"><span class="label">Commit</span><span class="value" id="commit">...</span></div>
       </section>
       <section class="span-8">
         <h2>Allowed Next States</h2>
         <div class="actions" id="states">{states}</div>
+        <div class="actions" style="margin-top: 12px;">
+          <button id="resetError">Reset To IDLE</button>
+          <button id="injectFault">Inject Test Fault</button>
+        </div>
         <div id="stateReasons" style="margin-top: 12px;"></div>
       </section>
       <section class="span-6">
@@ -673,6 +753,7 @@ def html_page() -> str:
       document.getElementById('state').textContent = data.current_state;
       document.getElementById('substate').textContent = data.current_substate || 'none';
       document.getElementById('fault').textContent = data.fault_reason || 'none';
+      document.getElementById('recovery').textContent = (data.error && data.error.recovery_action) || 'none';
       document.getElementById('returnLock').textContent = data.mode_manager && data.mode_manager.return_lock ? 'true' : 'false';
       document.getElementById('commit').textContent = data.git_commit || 'unknown';
       const hardware = document.getElementById('hardware');
@@ -733,6 +814,18 @@ def html_page() -> str:
     }});
     document.getElementById('estop').addEventListener('click', async () => {{
       await api('/api/emergency-stop', {{method: 'POST'}});
+      await refresh();
+    }});
+    document.getElementById('resetError').addEventListener('click', async () => {{
+      await api('/api/reset-error', {{method: 'POST'}});
+      await refresh();
+    }});
+    document.getElementById('injectFault').addEventListener('click', async () => {{
+      await api('/api/inject-fault', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{reason: 'operator diagnostic test fault'}})
+      }});
       await refresh();
     }});
     document.querySelectorAll('.state').forEach(btn => btn.addEventListener('click', async () => {{
@@ -828,6 +921,13 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/emergency-stop":
                 self.send_json(HTTPStatus.OK, self.context.emergency_stop())
+                return
+            if path == "/api/inject-fault":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.inject_fault(str(body.get("reason", ""))))
+                return
+            if path == "/api/reset-error":
+                self.send_json(HTTPStatus.OK, self.context.reset_error())
                 return
             if path == "/api/request-state":
                 body = self.read_json()

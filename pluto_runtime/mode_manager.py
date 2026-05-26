@@ -42,6 +42,7 @@ class TransitionRecord:
     source: str
     requires_stop: bool = False
     blocked_by: list[str] = field(default_factory=list)
+    fault_reason: str | None = None
 
 
 @dataclass
@@ -128,6 +129,7 @@ class ModeManager:
             source=source,
             requires_stop=requires_stop,
             blocked_by=blocked_by,
+            fault_reason=self.fault_reason,
         )
         self.transition_log.append(record)
         self.transition_log = self.transition_log[-120:]
@@ -176,15 +178,15 @@ class ModeManager:
         if target == "GAME_LATER":
             return False, "GAME_LATER is documented but not reachable in v1", ["game_later"]
 
-        if target == self.current_state:
-            return False, "current state", ["current_state"]
-
         if self.return_lock or context.return_lock or self.current_substate == "WELCOME_RETURN":
             if target != "ERROR":
                 return False, "WELCOME_RETURN blocks all non-error transitions", ["welcome_return_lock"]
 
         if target == "ERROR":
             return True, context.fault_reason or "ERROR may interrupt any state", []
+
+        if target == self.current_state:
+            return False, "current state", ["current_state"]
 
         if self.current_state == "BOOTSTRAP":
             if target == "IDLE":
