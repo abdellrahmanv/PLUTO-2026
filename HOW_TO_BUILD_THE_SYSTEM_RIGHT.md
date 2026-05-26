@@ -203,6 +203,20 @@ Unsafe next states blocked
 No raw motor command route exists outside allowed modes
 ```
 
+Phase 3 implementation files:
+
+```text
+feature_memory/WEB-001_operator_console_shell.md
+pluto_runtime/web_shell.py
+tools/web_shell_smoke.py
+```
+
+Phase 3 command:
+
+```bash
+python3 -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
+```
+
 ### Phase 4 - Camera Feed
 
 Goal:

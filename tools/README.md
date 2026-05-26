@@ -58,3 +58,26 @@ LCD visibly changes
 
 The tool never sends motor commands. It only validates Pluto face/display
 commands.
+
+## Phase 3 - Operator Website Shell
+
+Run the PLUTO operator console shell:
+
+```bash
+python3 -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
+```
+
+Smoke test:
+
+```bash
+python3 tools/web_shell_smoke.py
+```
+
+Expected pass evidence:
+
+```text
+WEB_SHELL_SMOKE PASS
+```
+
+The website shell displays system state and hardware status, blocks unavailable
+motion states, and exposes emergency stop. It does not expose raw motor routes.
