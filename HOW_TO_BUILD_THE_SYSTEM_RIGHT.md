@@ -161,6 +161,20 @@ FACE:HAPPY          -> LCD changes
 MODE:IDLE           -> LCD displays mode
 ```
 
+Phase 2 implementation files:
+
+```text
+feature_memory/IF-UNO-001_uno_lcd_serial_probe.md
+tools/uno_probe.py
+tools/README.md
+```
+
+Phase 2 command:
+
+```bash
+python3 tools/uno_probe.py
+```
+
 ### Phase 3 - Website Shell
 
 Goal:

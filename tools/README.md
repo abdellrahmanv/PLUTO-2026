@@ -29,3 +29,32 @@ OBS line present
 
 The tool never sends `CMD:DRIVE`, `CMD:ARM`, `CMD:RETURN`, or any other motion
 command. It sends only `CMD:PING` and `CMD:STOP`.
+
+## Phase 2 - Uno LCD Serial Validation
+
+Run after the Uno LCD controller firmware is flashed and the Uno is connected
+by USB:
+
+```bash
+python3 tools/uno_probe.py
+```
+
+If the auto-scan finds the wrong port, run with an explicit port:
+
+```bash
+python3 tools/uno_probe.py --port /dev/ttyACM1
+```
+
+Expected pass evidence:
+
+```text
+PHASE 2 RESULT: PASS
+ID:UNO_LCD present
+MODE commands acknowledged
+FACE commands acknowledged
+TEXT command acknowledged
+LCD visibly changes
+```
+
+The tool never sends motor commands. It only validates Pluto face/display
+commands.
