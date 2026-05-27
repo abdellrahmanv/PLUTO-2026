@@ -8,6 +8,7 @@ Piper only when its local binary/model are present.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -15,6 +16,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import wave
+from array import array
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +54,7 @@ class AudioProbe:
     stt_detail: str = "not checked"
     tts_backend: str = "unavailable"
     tts_detail: str = "not checked"
+    min_rms: float = 0.006
     last_recording: dict[str, Any] | None = None
     last_transcript: dict[str, Any] | None = None
     last_tts: dict[str, Any] | None = None
@@ -66,9 +70,11 @@ class AudioRuntime:
         sample_rate: int = 16000,
         channels: int = 1,
         cache_dir: str | None = None,
+        min_rms: float = 0.006,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
+        self.min_rms = min_rms
         self.cache_dir = Path(cache_dir or Path(tempfile.gettempdir()) / "pluto_tts_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
@@ -106,6 +112,7 @@ class AudioRuntime:
             stt_detail=whisper_path or "faster-whisper model not found",
             tts_backend="piper" if piper_binary and piper_model else "unavailable",
             tts_detail=f"{piper_binary} {piper_model}" if piper_binary and piper_model else "piper binary/model not found",
+            min_rms=self.min_rms,
             last_recording=self.probe_status.last_recording,
             last_transcript=self.probe_status.last_transcript,
             last_tts=self.probe_status.last_tts,
@@ -148,6 +155,7 @@ class AudioRuntime:
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=duration + 6)
             elapsed_ms = (time.monotonic() - started) * 1000.0
             ok = proc.returncode == 0 and path.exists() and path.stat().st_size > 44
+            signal = wav_signal_stats(path) if ok else {}
             result = {
                 "ok": ok,
                 "detail": "recorded" if ok else (proc.stderr.strip() or "recording failed"),
@@ -156,6 +164,7 @@ class AudioRuntime:
                 "elapsed_ms": elapsed_ms,
                 "bytes": path.stat().st_size if path.exists() else 0,
                 "device": status.selected_microphone,
+                "signal": signal,
             }
         except Exception as exc:
             result = {"ok": False, "detail": str(exc), "path": None, "duration_s": duration, "device": status.selected_microphone}
@@ -175,6 +184,19 @@ class AudioRuntime:
             return result
 
         try:
+            signal = wav_signal_stats(Path(wav_path))
+            if signal and signal.get("rms", 0.0) < self.min_rms:
+                result = {
+                    "ok": True,
+                    "detail": "silence skipped",
+                    "text": "",
+                    "elapsed_ms": 0.0,
+                    "signal": signal,
+                    "min_rms": self.min_rms,
+                }
+                self._set_transcript(result)
+                return result
+
             from faster_whisper import WhisperModel  # type: ignore
 
             started = time.monotonic()
@@ -200,6 +222,7 @@ class AudioRuntime:
                 "model_load_ms": load_ms,
                 "model": model_path,
                 "duration_s": getattr(info, "duration", None),
+                "signal": signal,
             }
         except Exception as exc:
             result = {"ok": False, "detail": str(exc), "text": "", "model": model_path}
@@ -363,6 +386,27 @@ def package_available(name: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def wav_signal_stats(path: str | Path) -> dict[str, float | int]:
+    try:
+        with wave.open(str(path), "rb") as wav:
+            frames = wav.readframes(wav.getnframes())
+            sample_width = wav.getsampwidth()
+            frame_count = wav.getnframes()
+            channels = wav.getnchannels()
+        if sample_width != 2 or not frames:
+            return {"rms": 0.0, "peak": 0.0, "frames": frame_count, "channels": channels}
+        samples = array("h")
+        samples.frombytes(frames)
+        if not samples:
+            return {"rms": 0.0, "peak": 0.0, "frames": frame_count, "channels": channels}
+        squares = sum(float(sample) * float(sample) for sample in samples)
+        rms = math.sqrt(squares / len(samples)) / 32768.0
+        peak = max(abs(sample) for sample in samples) / 32768.0
+        return {"rms": round(rms, 6), "peak": round(peak, 6), "frames": frame_count, "channels": channels}
+    except Exception:
+        return {}
 
 
 def discover_whisper_model() -> str | None:

@@ -93,6 +93,7 @@ External dependencies:
 | sample_rate | 16000 | 16000 recommended | Whisper-friendly speech input |
 | channels | 1 | 1 | Keeps CPU and file size low |
 | listen_duration_s | 3.0 | 0.5-8.0 | Short social questions |
+| min_rms | 0.006 | tune per room | Skip STT for silence/noise floor |
 | max_input_words | 9 | 1-9 in v1 | Keeps response path bounded |
 | max_output_words | 9 | 1-9 in v1 | Keeps TTS fast and clear |
 | PLUTO_WHISPER_MODEL | unset | local model path | Override model discovery |
@@ -117,6 +118,10 @@ The website exposes three WELCOME_TALK controls:
 - `Ask`: text answer only.
 - `Ask+Speak`: text answer plus Piper TTS.
 - `Listen 3s`: record from camera mic, transcribe, answer, and speak.
+
+Before Whisper runs, Pluto measures WAV RMS/peak. If the signal is below
+`min_rms`, it skips STT and returns the normal empty-input response. This keeps
+silent listens fast and avoids wasting CPU.
 
 WELCOME_TALK still requires WELCOME state. If used outside WELCOME, it is
 blocked and the website shows `Enter WELCOME first.`
@@ -192,6 +197,7 @@ AUDIO_IO_SMOKE PASS
 | VER-AUD-002 | `tools/audio_io_smoke.py --record-probe` | one-second WAV recorded | Pi probe passed manually |
 | VER-AUD-003 | `/api/audio/speak` | Piper TTS starts through speaker device | Piper/aplay command passed manually |
 | VER-WELCOME-013 | `/api/welcome/listen` in WELCOME | transcript, keyword answer, optional speech | pending live voice review |
+| VER-AUD-004 | Silence listen | STT skipped by RMS gate | implemented |
 
 ## Failure Modes
 
