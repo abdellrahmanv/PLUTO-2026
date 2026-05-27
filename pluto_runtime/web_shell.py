@@ -400,7 +400,23 @@ class PlutoWebContext:
         if result.accepted and result.requires_stop:
             stm32 = self.hardware["stm32"]
             stop_result = self.send_stm32_stop_safe(stm32.port)
+            stop_result = self.degraded_stop_guard_if_safe(stop_result)
             self.log("stop", f"WELCOME wave trigger stop guard: {stop_result['detail']}")
+            if stm32.connected and not stop_result.get("ok"):
+                transition = self.mode_manager.enter_error("Unable to verify stopped wheels before WELCOME wave trigger", source=source)
+                self.wave.rejected_count += 1
+                self.wave.last_reason = "stop guard failed"
+                payload = {
+                    "accepted": False,
+                    "reason": "stop guard failed",
+                    "event": event,
+                    "stop_guard": stop_result,
+                    "transition": transition.to_dict(),
+                    "wave": self.wave_status(),
+                }
+                self.wave.last_result = payload
+                self.log("error", f"WELCOME wave trigger blocked by stop guard: {stop_result['detail']}")
+                return payload
 
         if result.accepted:
             self.wave.trigger_count += 1

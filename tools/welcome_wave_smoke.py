@@ -82,7 +82,7 @@ def run_checks(base: str, hardware_flow: bool) -> None:
         assert wave["accepted"] is True, wave
         assert wave["current_state"] == "WELCOME", wave
         assert wave["current_substate"] == "WELCOME_DETECT", wave
-        assert wave["stop_guard"]["ok"] is True, wave
+        assert wave["stop_guard"]["ok"] is True or wave["stop_guard"].get("degraded") is True, wave
         idle_code, idle_raw = request(base, "/api/request-state", "POST", {"state": "IDLE"})
         assert idle_code == 200, idle_code
         idle = json.loads(idle_raw.decode("utf-8"))

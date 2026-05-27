@@ -172,6 +172,13 @@ not prove wrist motion. It produces a conservative wave-like intent candidate
 from the existing person boxes and still depends on the mode manager and STM32
 stop guard before WELCOME entry.
 
+WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
+an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
+link is alive, recent telemetry is available, wheel speed is zero, and manual
+drive intent is zero, the guard is marked as degraded-safe and the response
+records `degraded=true`. If neither proof exists, the trigger is rejected and
+the mode manager enters ERROR.
+
 Avoid in the first Pluto implementation:
 
 - `cv2.imshow`, because Pluto runs headless through the website.
@@ -289,3 +296,4 @@ WELCOME.
 | 2026-05-27 | Created feature memory from local wave detection study | Preserve design and defer implementation to WELCOME feature gate |
 | 2026-05-27 | Merged follow-wave into WELCOME | Keep wave as WELCOME_DETECT trigger, not a separate robot mode |
 | 2026-05-27 | Added lightweight v1 wave detector | Use existing camera boxes and avoid heavy pose dependencies |
+| 2026-05-27 | Reused degraded stop guard for wave trigger | Keep hardware validation consistent with WELCOME_TALK |
