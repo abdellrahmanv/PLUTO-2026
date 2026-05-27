@@ -136,6 +136,11 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
         assert talk["talk"]["response_words"] <= 9
         assert talk["stop_guard"]["ok"] is True
 
+        idle_code, idle_raw = request(base, "/api/request-state", "POST", {"state": "IDLE"})
+        assert idle_code == 200, idle_code
+        idle = json.loads(idle_raw.decode("utf-8"))
+        assert idle["accepted"] is True, idle
+
 
 def main() -> int:
     args = parse_args()
