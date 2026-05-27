@@ -68,6 +68,7 @@ def main() -> int:
         assert "stm32_runtime" in status
         assert "error" in status
         assert "manual" in status
+        assert "talk" in status
         assert "allowed_next_states" in status
         assert "transition_log" in status["mode_manager"]
 
@@ -98,6 +99,12 @@ def main() -> int:
         assert manual_code == 200, manual_code
         manual = json.loads(manual_raw.decode("utf-8"))
         assert manual["accepted"] is False
+
+        talk_code, talk_raw = request("/api/welcome/talk", "POST", {"text": "what is your name"})
+        assert talk_code == 200, talk_code
+        talk = json.loads(talk_raw.decode("utf-8"))
+        assert talk["accepted"] is False
+        assert "WELCOME_TALK" in talk["reason"]
 
         print("WEB_SHELL_SMOKE PASS")
         return 0

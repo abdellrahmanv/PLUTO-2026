@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 from .camera import CameraService, status_to_dict
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
+from .welcome_talk import TalkResult, WelcomeTalkEngine
 
 
 PROJECT_NAME = "PLUTO"
@@ -70,6 +71,7 @@ class PlutoStatus:
     stm32_runtime: dict[str, Any] = field(default_factory=dict)
     error: dict[str, Any] = field(default_factory=dict)
     manual: dict[str, Any] = field(default_factory=dict)
+    talk: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
@@ -108,6 +110,9 @@ class PlutoWebContext:
         self.mode_manager = ModeManager()
         self.stm32_link: Stm32SerialLink | None = None
         self.manual = ManualRuntime()
+        self.talk_engine = WelcomeTalkEngine()
+        self.talk_last_result: TalkResult | None = None
+        self.talk_history: deque[TalkResult] = deque(maxlen=20)
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
@@ -370,6 +375,45 @@ class PlutoWebContext:
         self.log("stop", f"MANUAL stop result: {stop['detail']}")
         return {"accepted": bool(stop["ok"]), "speed": 0, "steer": 0, "serial": stop}
 
+    def welcome_talk(self, text: str) -> dict[str, Any]:
+        if self.mode_manager.current_state != "WELCOME":
+            result = {
+                "accepted": False,
+                "reason": "WELCOME_TALK is only active in WELCOME",
+                "state": self.mode_manager.current_state,
+            }
+            self.log("warn", f"WELCOME_TALK rejected: {result['reason']}")
+            return result
+
+        stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+        if self.hardware["stm32"].connected and not stop.get("ok"):
+            transition = self.mode_manager.enter_error("Unable to verify stopped wheels before WELCOME_TALK", source="welcome_talk")
+            self.log("error", f"WELCOME_TALK blocked by stop guard: {stop['detail']}")
+            return {
+                "accepted": False,
+                "reason": "stop guard failed",
+                "stop_guard": stop,
+                "transition": transition.to_dict(),
+            }
+
+        self.mode_manager.set_substate("WELCOME_TALK", return_lock=False)
+        talk_result = self.talk_engine.answer(text)
+        with self.lock:
+            self.talk_last_result = talk_result
+            self.talk_history.appendleft(talk_result)
+            self.log(
+                "talk" if talk_result.accepted else "warn",
+                f"WELCOME_TALK {talk_result.response_source} {talk_result.reason}: {talk_result.response}",
+            )
+        return {
+            "accepted": talk_result.accepted,
+            "reason": talk_result.reason,
+            "state": self.mode_manager.current_state,
+            "substate": self.mode_manager.current_substate,
+            "stop_guard": stop,
+            "talk": talk_result.to_dict(),
+        }
+
     def forward_obstacle_reason(self, speed: int) -> str | None:
         if speed <= 0 or self.stm32_link is None:
             return None
@@ -416,9 +460,17 @@ class PlutoWebContext:
                 stm32_runtime=stm32_runtime,
                 error=self.error_status(mode_snapshot, stm32_runtime),
                 manual=asdict(self.manual),
+                talk=self.talk_status(),
                 events=events,
             )
             return status
+
+    def talk_status(self) -> dict[str, Any]:
+        return {
+            **self.talk_engine.status(),
+            "last_result": self.talk_last_result.to_dict() if self.talk_last_result else None,
+            "history": [item.to_dict() for item in list(self.talk_history)[:8]],
+        }
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
         in_error = mode_snapshot["current_state"] == "ERROR"
@@ -737,6 +789,19 @@ def html_page() -> str:
       grid-column: span 3;
       aspect-ratio: auto;
     }}
+    .talk-row {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .talk-row input {{
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+    }}
     .events {{
       min-height: 180px;
       max-height: 320px;
@@ -853,6 +918,18 @@ def html_page() -> str:
         </div>
       </section>
       <section class="span-6">
+        <h2>Welcome Talk</h2>
+        <div class="metric"><span class="label">Version</span><span class="value" id="talkVersion">v1</span></div>
+        <div class="metric"><span class="label">Limits</span><span class="value" id="talkLimits">9 in / 9 out</span></div>
+        <div class="metric"><span class="label">Source</span><span class="value" id="talkSource">none</span></div>
+        <div class="metric"><span class="label">Latency</span><span class="value" id="talkLatency">none</span></div>
+        <div class="metric"><span class="label">Response</span><span class="value" id="talkResponse">none</span></div>
+        <div class="talk-row">
+          <input id="talkInput" maxlength="120" placeholder="Ask Pluto a short question">
+          <button class="primary" id="talkAsk">Ask</button>
+        </div>
+      </section>
+      <section class="span-6">
         <h2>Camera</h2>
         <div class="cameraBox">
           <img id="cameraFeed" alt="PLUTO camera feed">
@@ -931,6 +1008,13 @@ def html_page() -> str:
         btn.disabled = !manual.enabled;
       }});
       document.getElementById('manualStop').disabled = !manual.enabled;
+      const talk = data.talk || {{}};
+      const lastTalk = talk.last_result || null;
+      document.getElementById('talkVersion').textContent = `${{talk.version || 'v1'}} / ${{talk.primary_engine || 'keyword'}}`;
+      document.getElementById('talkLimits').textContent = `${{talk.max_input_words || 9}} in / ${{talk.max_output_words || 9}} out`;
+      document.getElementById('talkSource').textContent = lastTalk ? `${{lastTalk.response_source}} / ${{lastTalk.intent || 'none'}}` : 'none';
+      document.getElementById('talkLatency').textContent = lastTalk ? `${{lastTalk.latency_ms.toFixed(2)}} ms` : 'none';
+      document.getElementById('talkResponse').textContent = lastTalk ? lastTalk.response : 'none';
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -1017,6 +1101,22 @@ def html_page() -> str:
     }});
     document.getElementById('manualStop').addEventListener('click', async () => {{
       await manualStop();
+    }});
+    document.getElementById('talkAsk').addEventListener('click', async () => {{
+      const input = document.getElementById('talkInput');
+      await api('/api/welcome/talk', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{text: input.value}})
+      }});
+      input.value = '';
+      await refresh();
+    }});
+    document.getElementById('talkInput').addEventListener('keydown', async (event) => {{
+      if (event.key === 'Enter') {{
+        event.preventDefault();
+        document.getElementById('talkAsk').click();
+      }}
     }});
     refresh();
     setInterval(refresh, 1000);
@@ -1130,6 +1230,10 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/manual/stop":
                 self.send_json(HTTPStatus.OK, self.context.manual_stop())
+                return
+            if path == "/api/welcome/talk":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.welcome_talk(str(body.get("text", ""))))
                 return
             if path == "/api/shutdown":
                 body = self.read_json()

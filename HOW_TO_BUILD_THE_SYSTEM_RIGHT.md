@@ -472,6 +472,13 @@ WELCOME talk strategy memory:
 feature_memory/STATE-3.33_welcome_talk_strategy_study.md
 ```
 
+WELCOME_TALK v1 implementation memory:
+
+```text
+feature_memory/STATE-3.33_welcome_talk_v1.md
+tools/welcome_talk_smoke.py
+```
+
 WELCOME_TALK build split:
 
 ```text
