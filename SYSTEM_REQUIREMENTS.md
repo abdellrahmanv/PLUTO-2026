@@ -232,6 +232,9 @@ robot noise, motor vibration, speaker feedback, and room noise.
 | AUD-016 | Ollama/LLM fallback shall be disabled by default until measured latency is acceptable. | Pi | Config and latency test |
 | AUD-017 | If LLM fallback is enabled, Pi shall enforce timeout, input word limit, output word limit, and fallback behavior. | Pi | LLM fault test |
 | AUD-018 | If recognized speech exceeds the configured word limit, Pluto shall ask for a shorter question instead of sending it to LLM. | Pi | Long utterance test |
+| AUD-019 | WELCOME_TALK v1 shall be fully offline and shall not depend on API keys or cloud speech services. | Pi | Offline run test |
+| AUD-020 | WELCOME_TALK v1.5 may add local Ollama/Qwen fallback only after benchmark evidence is recorded. | Pi | Benchmark review |
+| AUD-021 | WELCOME_TALK v1.5 shall keep keyword/intent matching as the first response path even if Ollama is enabled. | Pi | Response source log |
 
 ## Stepper Arm Requirements
 
@@ -772,6 +775,16 @@ WELCOME_DONE
 | STATE-3.33.3 | WELCOME_TALK v1 shall keep each spoken answer at or below 9 words unless explicitly configured otherwise. | Pi | Response bank test |
 | STATE-3.33.4 | WELCOME_TALK shall use a local fallback answer when no keyword/intent match is found. | Pi | Unknown question test |
 | STATE-3.33.5 | WELCOME_TALK shall not call Ollama/LLM unless enabled by configuration and bounded by timeout. | Pi | LLM config test |
+| STATE-3.33.6 | WELCOME_TALK v1 shall use only local/offline components for recognition, answer selection, and output. | Pi | Offline run test |
+| STATE-3.33.7 | WELCOME_TALK v1.5 shall treat Ollama/Qwen as a fallback path, not as the primary conversation engine. | Pi | Response source log |
+| STATE-3.33.8 | WELCOME_TALK v1.5 shall have a benchmark gate before it can be enabled on the robot. | Project + Pi | Benchmark review |
+
+### WELCOME_TALK Version Roadmap
+
+| Version | Scope | Allowed Engines | Not Allowed | Exit Criteria |
+| --- | --- | --- | --- | --- |
+| v1 | Small latency, good-enough welcome talk | offline STT, keyword/fuzzy intent, canned responses, cached/local TTS or text fallback | cloud APIs, API keys, primary LLM response path | short question answered locally within target latency |
+| v1.5 | Better awareness without losing speed | all v1 engines plus optional local Ollama/Qwen fallback | unbounded LLM prompts, long answers, LLM-only mode | benchmark proves fallback is bounded and safe |
 
 ### Return Requirements
 
@@ -1182,6 +1195,9 @@ GAME_LATER is not implemented in v1.
 | AUD-016 | STATE-3.33.5 | config and latency test |
 | AUD-017 | STATE-3.33.5 | LLM fault test |
 | AUD-018 | STATE-3.33.2 | long utterance test |
+| AUD-019 | STATE-3.33.6 | offline run test |
+| AUD-020 | STATE-3.33.8 | benchmark review |
+| AUD-021 | STATE-3.33.7 | response source log |
 
 ## Arm-To-Test Trace
 

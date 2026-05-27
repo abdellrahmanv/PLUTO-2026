@@ -27,12 +27,18 @@ AUD-015
 AUD-016
 AUD-017
 AUD-018
+AUD-019
+AUD-020
+AUD-021
 STATE-3.33
 STATE-3.33.1
 STATE-3.33.2
 STATE-3.33.3
 STATE-3.33.4
 STATE-3.33.5
+STATE-3.33.6
+STATE-3.33.7
+STATE-3.33.8
 STATE-3.34
 STATE-3.35
 STATE-3.36
@@ -66,6 +72,8 @@ The hard interaction constraints are:
 - Wheels shall remain stopped during TALK.
 - Keyword/intent matching shall be the primary answer path.
 - Ollama/LLM shall be fallback only after measured latency proves it is acceptable.
+- v1 shall be fully offline and require no API keys.
+- v1.5 may add local Ollama/Qwen fallback, but keyword matching remains first.
 
 ## Repos And Notes Studied
 
@@ -93,7 +101,26 @@ Findings:
 
 ## Decision
 
-Chosen v1 strategy:
+Chosen roadmap:
+
+```text
+v1:
+  fully offline
+  keyword/fuzzy intent matching first
+  max 9 input words
+  max 9 output words
+  canned/local responses
+  no API keys
+  no cloud calls
+
+v1.5:
+  keep v1 path as primary
+  add local Ollama/Qwen fallback only behind config
+  require benchmark evidence before enabling
+  enforce timeout and word limits
+```
+
+Chosen v1 runtime strategy:
 
 ```text
 STT result
@@ -105,10 +132,10 @@ STT result
   -> log latency and response source
 ```
 
-Ollama/Qwen is not rejected forever. It is rejected as the primary v1 path
-because previous Pluto notes show Qwen 0.5B around 4.3 seconds on Raspberry Pi
-4. Even if a 9-word prompt improves this, it must be benchmarked before it can
-be enabled in WELCOME_TALK.
+Ollama/Qwen is not rejected forever. It becomes the v1.5 fallback candidate.
+It is rejected as the primary v1 path because previous Pluto notes show Qwen
+0.5B around 4.3 seconds on Raspberry Pi 4. Even if a 9-word prompt improves
+this, it must be benchmarked before it can be enabled in WELCOME_TALK.
 
 The LLM path should be:
 
@@ -207,6 +234,7 @@ External dependencies:
 | `talk_enable_ollama_fallback` | `false` | bool | LLM must not slow v1 |
 | `talk_ollama_timeout_ms` | 1000 | 250-3000 | Must respect TIME-009 if enabled |
 | `talk_unknown_response` | `Ask me something simpler, please.` | text <= 9 words | Safe fallback |
+| `talk_version` | `v1` | `v1`, `v1.5` | Explicitly gates the engine set |
 
 ## Runtime Behavior
 
@@ -292,6 +320,8 @@ WELCOME_TALK source=fallback reason=llm_disabled
 | VER-TALK-003 | Check response bank | every response <= 9 words | not run |
 | VER-TALK-004 | Enable Ollama with timeout | slow LLM falls back safely | not run |
 | VER-WELCOME-013 | Run TALK with motor noise | low confidence/fallback logged | not run |
+| VER-TALK-005 | Run with no internet/API keys | v1 still answers with local responses | not run |
+| VER-TALK-006 | Enable v1.5 without benchmark file | Ollama fallback remains disabled | not run |
 
 ## Failure Modes
 
@@ -320,3 +350,4 @@ emergency stop, obstacle stop, or manual stop.
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-05-27 | Initial study draft | Choose WELCOME_TALK v1 strategy before code |
+| 2026-05-27 | Added v1/v1.5 split | Lock offline keyword-first v1 and benchmark-gated Qwen fallback |

@@ -438,6 +438,8 @@ Features:
 - simple talk fallback
 - 9-word talk input/output limits
 - keyword-first answer strategy
+- fully offline v1 talk path
+- optional local Ollama/Qwen v1.5 fallback gate
 - return lock
 - return completion
 - crowd handling
@@ -452,6 +454,8 @@ Obstacle             -> stop/request space
 Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
 Talk answer          -> keyword-first, max 9 words
+Talk v1              -> offline, no API keys, no cloud calls
+Talk v1.5            -> Ollama fallback only after benchmark
 Return               -> other modes blocked
 Return complete      -> IDLE
 ```
@@ -466,6 +470,18 @@ WELCOME talk strategy memory:
 
 ```text
 feature_memory/STATE-3.33_welcome_talk_strategy_study.md
+```
+
+WELCOME_TALK build split:
+
+```text
+v1:
+  Build keyword/fuzzy intent matching first.
+  Keep answers short, local, testable, and boring-fast.
+
+v1.5:
+  Add local Ollama/Qwen fallback only after benchmark evidence exists.
+  Keyword/fuzzy matching remains the first path.
 ```
 
 ### Phase 10 - DANCE
