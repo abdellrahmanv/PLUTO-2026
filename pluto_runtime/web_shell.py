@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from .audio_io import AudioRuntime
 from .camera import CameraService, status_to_dict
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
@@ -72,6 +73,7 @@ class PlutoStatus:
     error: dict[str, Any] = field(default_factory=dict)
     manual: dict[str, Any] = field(default_factory=dict)
     talk: dict[str, Any] = field(default_factory=dict)
+    audio: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
 
 
@@ -114,14 +116,15 @@ class PlutoWebContext:
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
         self.talk_last_notice = "Enter WELCOME, then ask a short question."
+        self.audio_runtime = AudioRuntime()
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
             "uno": HardwareDevice("Uno LCD face controller", False),
             "camera": HardwareDevice("Camera", False, status="starting", detail="Phase 4"),
-            "speaker": HardwareDevice("Speaker", False, status="not_implemented", detail="Future audio phase"),
-            "microphone": HardwareDevice("Microphone", False, status="not_implemented", detail="Future speech phase"),
+            "speaker": HardwareDevice("Speaker", False, status="starting", detail="Phase 9 audio"),
+            "microphone": HardwareDevice("Microphone", False, status="starting", detail="Phase 9 audio"),
         }
         self.log("info", "PLUTO web shell starting")
         self.camera_service = CameraService(
@@ -151,6 +154,7 @@ class PlutoWebContext:
 
         stm32 = probe_stm32(ports, self.serial_baud)
         uno = probe_uno(ports, self.serial_baud, skip_port=stm32.port if stm32.connected else None)
+        audio_status = self.audio_runtime.probe()
 
         with self.lock:
             self.hardware["stm32"] = stm32
@@ -165,19 +169,39 @@ class PlutoWebContext:
                 detail=camera_status.error or f"{camera_status.backend} {camera_status.resolution}",
                 last_seen=time.time() if camera_status.available else None,
             )
+            self.hardware["microphone"] = HardwareDevice(
+                "Microphone",
+                False,
+                connected=audio_status.microphone_available,
+                port=audio_status.selected_microphone,
+                status="connected" if audio_status.microphone_available else "unavailable",
+                detail=audio_status.stt_detail if audio_status.microphone_available else "no capture device selected",
+                last_seen=time.time() if audio_status.microphone_available else None,
+            )
+            self.hardware["speaker"] = HardwareDevice(
+                "Speaker",
+                False,
+                connected=audio_status.speaker_available,
+                port=audio_status.selected_speaker,
+                status="connected" if audio_status.speaker_available else "unavailable",
+                detail=audio_status.tts_detail if audio_status.speaker_available else "no playback device selected",
+                last_seen=time.time() if audio_status.speaker_available else None,
+            )
             self.bootstrap_report = {
-                "phase": "Phase 6 IDLE runtime baseline",
+                "phase": "Phase 9 WELCOME talk/audio baseline",
                 "serial_ports": ports,
                 "required_hardware": {"stm32": asdict(stm32)},
                 "optional_hardware": {
                     "uno": asdict(uno),
                     "camera": status_to_dict(camera_status),
+                    "audio": audio_status.to_dict(),
                 },
                 "notes": [
                     "Website shell does not enable motion states.",
                     "Emergency stop sends CMD:STOP when STM32 is available.",
                     "IDLE runtime keeps STM32 heartbeat alive when connected.",
                     "Camera feed uses threaded capture, frame skipping, MJPG, low resolution, and warmup suppression.",
+                    "WELCOME_TALK v1 can use website text, camera microphone STT, and local Piper TTS when available.",
                 ],
             }
             if stm32.connected:
@@ -376,7 +400,63 @@ class PlutoWebContext:
         self.log("stop", f"MANUAL stop result: {stop['detail']}")
         return {"accepted": bool(stop["ok"]), "speed": 0, "steer": 0, "serial": stop}
 
-    def welcome_talk(self, text: str) -> dict[str, Any]:
+    def audio_status(self) -> dict[str, Any]:
+        return self.audio_runtime.status()
+
+    def refresh_audio(self) -> dict[str, Any]:
+        status = self.audio_runtime.probe()
+        with self.lock:
+            self.hardware["microphone"] = HardwareDevice(
+                "Microphone",
+                False,
+                connected=status.microphone_available,
+                port=status.selected_microphone,
+                status="connected" if status.microphone_available else "unavailable",
+                detail=status.stt_detail if status.microphone_available else "no capture device selected",
+                last_seen=time.time() if status.microphone_available else None,
+            )
+            self.hardware["speaker"] = HardwareDevice(
+                "Speaker",
+                False,
+                connected=status.speaker_available,
+                port=status.selected_speaker,
+                status="connected" if status.speaker_available else "unavailable",
+                detail=status.tts_detail if status.speaker_available else "no playback device selected",
+                last_seen=time.time() if status.speaker_available else None,
+            )
+            self.log("info", "Audio hardware refreshed")
+        return status.to_dict()
+
+    def audio_speak(self, text: str) -> dict[str, Any]:
+        result = self.audio_runtime.speak_async(text)
+        self.log("talk" if result.get("ok") else "warn", f"Audio speak: {result.get('detail')}")
+        return {"accepted": bool(result.get("ok")), "audio": result, "status": self.audio_status()}
+
+    def welcome_talk(self, text: str, speak: bool = False) -> dict[str, Any]:
+        guard = self.prepare_welcome_talk()
+        if not guard["ok"]:
+            return guard["payload"]
+        return self.answer_welcome_talk(text, guard["stop"], speak=speak)
+
+    def welcome_listen(self, duration_s: float = 3.0, speak: bool = False) -> dict[str, Any]:
+        guard = self.prepare_welcome_talk()
+        if not guard["ok"]:
+            return guard["payload"]
+
+        with self.lock:
+            self.talk_last_notice = "Listening..."
+            self.log("talk", f"WELCOME_TALK listening for {duration_s:.1f}s")
+
+        listen = self.audio_runtime.listen(duration_s)
+        transcript = listen.get("transcript") or {}
+        text = str(transcript.get("text") or "").strip()
+        payload = self.answer_welcome_talk(text, guard["stop"], speak=speak)
+        payload["audio_listen"] = listen
+        payload["recognized_text"] = text
+        payload["audio"] = self.audio_status()
+        return payload
+
+    def prepare_welcome_talk(self) -> dict[str, Any]:
         if self.mode_manager.current_state != "WELCOME":
             self.talk_last_notice = "Enter WELCOME first."
             result = {
@@ -386,23 +466,30 @@ class PlutoWebContext:
                 "display_response": self.talk_last_notice,
             }
             self.log("warn", f"WELCOME_TALK rejected: {result['reason']}")
-            return result
+            return {"ok": False, "payload": result}
 
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
         if self.hardware["stm32"].connected and not stop.get("ok"):
             self.talk_last_notice = "Stop guard failed."
             transition = self.mode_manager.enter_error("Unable to verify stopped wheels before WELCOME_TALK", source="welcome_talk")
             self.log("error", f"WELCOME_TALK blocked by stop guard: {stop['detail']}")
-            return {
+            result = {
                 "accepted": False,
                 "reason": "stop guard failed",
                 "display_response": self.talk_last_notice,
                 "stop_guard": stop,
                 "transition": transition.to_dict(),
             }
+            return {"ok": False, "payload": result}
 
+        return {"ok": True, "stop": stop}
+
+    def answer_welcome_talk(self, text: str, stop: dict[str, Any], speak: bool = False) -> dict[str, Any]:
         self.mode_manager.set_substate("WELCOME_TALK", return_lock=False)
         talk_result = self.talk_engine.answer(text)
+        tts_result: dict[str, Any] | None = None
+        if speak:
+            tts_result = self.audio_runtime.speak_async(talk_result.response)
         with self.lock:
             self.talk_last_result = talk_result
             self.talk_history.appendleft(talk_result)
@@ -418,6 +505,7 @@ class PlutoWebContext:
             "substate": self.mode_manager.current_substate,
             "stop_guard": stop,
             "talk": talk_result.to_dict(),
+            "speech": tts_result,
             "display_response": talk_result.response,
         }
 
@@ -468,6 +556,7 @@ class PlutoWebContext:
                 error=self.error_status(mode_snapshot, stm32_runtime),
                 manual=asdict(self.manual),
                 talk=self.talk_status(),
+                audio=self.audio_status(),
                 events=events,
             )
             return status
@@ -799,7 +888,7 @@ def html_page() -> str:
     }}
     .talk-row {{
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
       gap: 10px;
       margin-top: 12px;
     }}
@@ -867,6 +956,7 @@ def html_page() -> str:
       header {{ align-items: flex-start; flex-direction: column; }}
       .span-4, .span-6, .span-8 {{ grid-column: span 12; }}
       .event {{ grid-template-columns: 1fr; }}
+      .talk-row {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -933,9 +1023,16 @@ def html_page() -> str:
         <div class="metric"><span class="label">Latency</span><span class="value" id="talkLatency">none</span></div>
         <div class="metric"><span class="label">Notice</span><span class="value" id="talkNotice">Enter WELCOME first</span></div>
         <div class="metric"><span class="label">Response</span><span class="value" id="talkResponse">none</span></div>
+        <div class="metric"><span class="label">Transcript</span><span class="value" id="talkTranscript">none</span></div>
+        <div class="metric"><span class="label">Audio</span><span class="value" id="audioState">not checked</span></div>
+        <div class="metric"><span class="label">Mic</span><span class="value" id="audioMic">none</span></div>
+        <div class="metric"><span class="label">Speaker</span><span class="value" id="audioSpeaker">none</span></div>
+        <div class="metric"><span class="label">Speech IO</span><span class="value" id="audioEngines">none</span></div>
         <div class="talk-row">
           <input id="talkInput" maxlength="120" placeholder="Ask Pluto a short question">
           <button class="primary" id="talkAsk">Ask</button>
+          <button id="talkSpeak">Ask+Speak</button>
+          <button id="talkListen">Listen 3s</button>
         </div>
       </section>
       <section class="span-6">
@@ -1025,6 +1122,16 @@ def html_page() -> str:
       document.getElementById('talkLatency').textContent = lastTalk ? `${{lastTalk.latency_ms.toFixed(2)}} ms` : 'none';
       document.getElementById('talkNotice').textContent = talk.last_notice || 'Enter WELCOME first.';
       document.getElementById('talkResponse').textContent = lastTalk ? lastTalk.response : (talk.last_notice || 'none');
+      const audio = data.audio || {{}};
+      const transcript = audio.last_transcript || {{}};
+      const tts = audio.last_tts || {{}};
+      document.getElementById('talkTranscript').textContent = transcript.text || 'none';
+      document.getElementById('audioState').textContent =
+        `${{audio.microphone_available ? 'mic ok' : 'no mic'}} / ${{audio.speaker_available ? 'speaker ok' : 'no speaker'}}`;
+      document.getElementById('audioMic').textContent = audio.selected_microphone || 'none';
+      document.getElementById('audioSpeaker').textContent = audio.selected_speaker || 'none';
+      document.getElementById('audioEngines').textContent =
+        `${{audio.stt_backend || 'stt?'}} / ${{audio.tts_backend || 'tts?'}}${{tts.detail ? ' / ' + tts.detail : ''}}`;
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -1112,12 +1219,12 @@ def html_page() -> str:
     document.getElementById('manualStop').addEventListener('click', async () => {{
       await manualStop();
     }});
-    document.getElementById('talkAsk').addEventListener('click', async () => {{
+    async function submitTalk(speak) {{
       const input = document.getElementById('talkInput');
       const result = await api('/api/welcome/talk', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{text: input.value}})
+        body: JSON.stringify({{text: input.value, speak}})
       }});
       document.getElementById('talkNotice').textContent = result.display_response || result.reason || 'no response';
       if (result.talk) {{
@@ -1128,6 +1235,24 @@ def html_page() -> str:
         document.getElementById('talkResponse').textContent = result.display_response || result.reason || 'no response';
       }}
       input.value = '';
+      await refresh();
+    }}
+    document.getElementById('talkAsk').addEventListener('click', async () => submitTalk(false));
+    document.getElementById('talkSpeak').addEventListener('click', async () => submitTalk(true));
+    document.getElementById('talkListen').addEventListener('click', async () => {{
+      document.getElementById('talkNotice').textContent = 'Listening...';
+      const result = await api('/api/welcome/listen', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{duration_s: 3.0, speak: true}})
+      }});
+      document.getElementById('talkNotice').textContent = result.display_response || result.reason || 'no response';
+      document.getElementById('talkTranscript').textContent = result.recognized_text || 'none';
+      if (result.talk) {{
+        document.getElementById('talkResponse').textContent = result.talk.response;
+        document.getElementById('talkSource').textContent = `${{result.talk.response_source}} / ${{result.talk.intent || 'none'}}`;
+        document.getElementById('talkLatency').textContent = `${{result.talk.latency_ms.toFixed(2)}} ms`;
+      }}
       await refresh();
     }});
     document.getElementById('talkInput').addEventListener('keydown', async (event) => {{
@@ -1182,6 +1307,9 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/camera/status":
             self.send_json(HTTPStatus.OK, self.context.snapshot().camera)
+            return
+        if path == "/api/audio/status":
+            self.send_json(HTTPStatus.OK, self.context.audio_status())
             return
         if path == "/camera.jpg":
             frame = self.context.camera_service.get_jpeg()
@@ -1249,9 +1377,23 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/manual/stop":
                 self.send_json(HTTPStatus.OK, self.context.manual_stop())
                 return
+            if path == "/api/audio/refresh":
+                self.send_json(HTTPStatus.OK, self.context.refresh_audio())
+                return
+            if path == "/api/audio/speak":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.audio_speak(str(body.get("text", ""))))
+                return
             if path == "/api/welcome/talk":
                 body = self.read_json()
-                self.send_json(HTTPStatus.OK, self.context.welcome_talk(str(body.get("text", ""))))
+                self.send_json(HTTPStatus.OK, self.context.welcome_talk(str(body.get("text", "")), bool(body.get("speak", False))))
+                return
+            if path == "/api/welcome/listen":
+                body = self.read_json()
+                self.send_json(
+                    HTTPStatus.OK,
+                    self.context.welcome_listen(float(body.get("duration_s", 3.0)), bool(body.get("speak", False))),
+                )
                 return
             if path == "/api/shutdown":
                 body = self.read_json()

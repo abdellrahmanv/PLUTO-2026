@@ -4,7 +4,7 @@ Status: implemented, local smoke validated
 
 Last updated: 2026-05-27
 
-Last validated: 2026-05-27 local smoke test, not yet validated on Raspberry Pi microphone/speaker
+Last validated: 2026-05-27 local smoke test; Raspberry Pi camera mic/Piper probe recorded in `AUD-001_audio_io_v1.md`
 
 Owner: Pluto systems engineering
 
@@ -36,6 +36,7 @@ Verification tests:
 ```text
 tools/welcome_talk_smoke.py
 tools/web_shell_smoke.py
+tools/audio_io_smoke.py
 ```
 
 ## Design Intent
@@ -61,7 +62,7 @@ benchmark gate.
 Inputs:
 
 - Website text fallback through `POST /api/welcome/talk`.
-- Future STT text from microphone path.
+- Camera microphone STT text through `pluto_runtime/audio_io.py`.
 
 Outputs:
 
@@ -111,6 +112,7 @@ Local smoke:
 
 ```bash
 python tools/welcome_talk_smoke.py
+python tools/audio_io_smoke.py
 ```
 
 With an already running Pi web server:

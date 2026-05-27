@@ -438,7 +438,12 @@ Features:
 - simple talk fallback
 - 9-word talk input/output limits
 - keyword-first answer strategy
+- large deterministic keyword bank
 - fully offline v1 talk path
+- camera microphone detection
+- local speech-to-text detection
+- local Piper text-to-speech output
+- website Listen and Ask+Speak controls
 - optional local Ollama/Qwen v1.5 fallback gate
 - return lock
 - return completion
@@ -455,6 +460,9 @@ Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
 Talk answer          -> keyword-first, max 9 words
 Talk v1              -> offline, no API keys, no cloud calls
+Camera mic           -> detected as selected microphone
+Audio smoke          -> record probe succeeds
+Ask+Speak            -> response shown and TTS command starts
 Talk v1.5            -> Ollama fallback only after benchmark
 Return               -> other modes blocked
 Return complete      -> IDLE
@@ -476,7 +484,9 @@ WELCOME_TALK v1 implementation memory:
 
 ```text
 feature_memory/STATE-3.33_welcome_talk_v1.md
+feature_memory/AUD-001_audio_io_v1.md
 tools/welcome_talk_smoke.py
+tools/audio_io_smoke.py
 ```
 
 WELCOME_TALK build split:

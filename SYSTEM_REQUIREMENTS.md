@@ -235,6 +235,8 @@ robot noise, motor vibration, speaker feedback, and room noise.
 | AUD-019 | WELCOME_TALK v1 shall be fully offline and shall not depend on API keys or cloud speech services. | Pi | Offline run test |
 | AUD-020 | WELCOME_TALK v1.5 may add local Ollama/Qwen fallback only after benchmark evidence is recorded. | Pi | Benchmark review |
 | AUD-021 | WELCOME_TALK v1.5 shall keep keyword/intent matching as the first response path even if Ollama is enabled. | Pi | Response source log |
+| AUD-022 | Pi shall prefer the webcam/camera microphone when it is detected as an ALSA capture device. | Pi | Audio probe |
+| AUD-023 | Website shall expose audio status, selected microphone, selected speaker, and STT/TTS backend. | Pi | UI/API test |
 
 ## Stepper Arm Requirements
 
@@ -778,6 +780,8 @@ WELCOME_DONE
 | STATE-3.33.6 | WELCOME_TALK v1 shall use only local/offline components for recognition, answer selection, and output. | Pi | Offline run test |
 | STATE-3.33.7 | WELCOME_TALK v1.5 shall treat Ollama/Qwen as a fallback path, not as the primary conversation engine. | Pi | Response source log |
 | STATE-3.33.8 | WELCOME_TALK v1.5 shall have a benchmark gate before it can be enabled on the robot. | Project + Pi | Benchmark review |
+| STATE-3.33.9 | WELCOME_TALK v1 shall include a broad keyword bank before any LLM fallback is enabled. | Pi | Response bank test |
+| STATE-3.33.10 | Website WELCOME_TALK shall support text ask, ask-and-speak, and camera-mic listen controls. | Pi | UI/API test |
 
 ### WELCOME_TALK Version Roadmap
 

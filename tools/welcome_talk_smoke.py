@@ -108,6 +108,8 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
     assert status["talk"]["max_input_words"] == 9
     assert status["talk"]["max_output_words"] == 9
     assert status["talk"]["ollama_fallback_enabled"] is False
+    assert status["talk"]["intent_count"] >= 60
+    assert "audio" in status
 
     blocked_code, blocked_raw = request(base, "/api/welcome/talk", "POST", {"text": "what is your name"})
     assert blocked_code == 200, blocked_code

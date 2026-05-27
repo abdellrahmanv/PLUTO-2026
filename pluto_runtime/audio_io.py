@@ -1,0 +1,389 @@
+"""Audio hardware and offline speech helpers for Pluto.
+
+The implementation is intentionally dependency-light. It probes Linux ALSA
+devices with system tools, uses faster-whisper only when available, and uses
+Piper only when its local binary/model are present.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+CAPTURE_RE = re.compile(
+    r"card\s+(?P<card>\d+):\s+(?P<card_id>[^\[]+)\[(?P<card_name>[^\]]+)\],\s+"
+    r"device\s+(?P<device>\d+):\s+(?P<device_id>[^\[]+)\[(?P<device_name>[^\]]+)\]"
+)
+
+
+@dataclass
+class AudioDevice:
+    id: str
+    name: str
+    kind: str
+    card: str | None = None
+    device: str | None = None
+    detail: str = ""
+    preferred: bool = False
+
+
+@dataclass
+class AudioProbe:
+    microphone_available: bool = False
+    speaker_available: bool = False
+    selected_microphone: str | None = None
+    selected_speaker: str | None = None
+    capture_devices: list[AudioDevice] = field(default_factory=list)
+    playback_devices: list[AudioDevice] = field(default_factory=list)
+    tools: dict[str, bool] = field(default_factory=dict)
+    packages: dict[str, bool] = field(default_factory=dict)
+    stt_backend: str = "unavailable"
+    stt_detail: str = "not checked"
+    tts_backend: str = "unavailable"
+    tts_detail: str = "not checked"
+    last_recording: dict[str, Any] | None = None
+    last_transcript: dict[str, Any] | None = None
+    last_tts: dict[str, Any] | None = None
+    errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class AudioRuntime:
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        channels: int = 1,
+        cache_dir: str | None = None,
+    ) -> None:
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.cache_dir = Path(cache_dir or Path(tempfile.gettempdir()) / "pluto_tts_cache")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+        self.probe_status = AudioProbe()
+        self._whisper_model = None
+        self._whisper_model_path: str | None = None
+        self.probe()
+
+    def probe(self) -> AudioProbe:
+        tools = {name: shutil.which(name) is not None for name in ("arecord", "aplay", "ffmpeg", "piper")}
+        tools["piper_local"] = Path("/home/pi/pluto-v2/piper/piper").exists()
+
+        capture = parse_alsa_devices(run_text(["arecord", "-l"]) if tools["arecord"] else "", "capture")
+        playback = parse_alsa_devices(run_text(["aplay", "-l"]) if tools["aplay"] else "", "playback")
+        selected_mic = select_capture_device(capture)
+        selected_speaker = select_playback_device(playback)
+
+        packages = {
+            "faster_whisper": package_available("faster_whisper"),
+            "numpy": package_available("numpy"),
+        }
+        whisper_path = discover_whisper_model()
+        piper_binary, piper_model = discover_piper()
+
+        status = AudioProbe(
+            microphone_available=bool(selected_mic and tools["arecord"]),
+            speaker_available=bool(selected_speaker and tools["aplay"]),
+            selected_microphone=selected_mic.id if selected_mic else None,
+            selected_speaker=selected_speaker.id if selected_speaker else None,
+            capture_devices=capture,
+            playback_devices=playback,
+            tools=tools,
+            packages=packages,
+            stt_backend="faster-whisper" if packages["faster_whisper"] and whisper_path else "unavailable",
+            stt_detail=whisper_path or "faster-whisper model not found",
+            tts_backend="piper" if piper_binary and piper_model else "unavailable",
+            tts_detail=f"{piper_binary} {piper_model}" if piper_binary and piper_model else "piper binary/model not found",
+            last_recording=self.probe_status.last_recording,
+            last_transcript=self.probe_status.last_transcript,
+            last_tts=self.probe_status.last_tts,
+        )
+        with self.lock:
+            self.probe_status = status
+        return status
+
+    def status(self) -> dict[str, Any]:
+        with self.lock:
+            return self.probe_status.to_dict()
+
+    def record(self, duration_s: float = 3.0) -> dict[str, Any]:
+        status = self.probe_status
+        if not status.microphone_available or not status.selected_microphone:
+            result = {"ok": False, "detail": "microphone unavailable", "path": None}
+            self._set_recording(result)
+            return result
+
+        duration = max(0.5, min(float(duration_s), 8.0))
+        arecord_seconds = max(1, int(round(duration)))
+        path = Path(tempfile.gettempdir()) / f"pluto_listen_{int(time.time() * 1000)}.wav"
+        cmd = [
+            "arecord",
+            "-q",
+            "-D",
+            status.selected_microphone,
+            "-f",
+            "S16_LE",
+            "-r",
+            str(self.sample_rate),
+            "-c",
+            str(self.channels),
+            "-d",
+            str(arecord_seconds),
+            str(path),
+        ]
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=duration + 6)
+            elapsed_ms = (time.monotonic() - started) * 1000.0
+            ok = proc.returncode == 0 and path.exists() and path.stat().st_size > 44
+            result = {
+                "ok": ok,
+                "detail": "recorded" if ok else (proc.stderr.strip() or "recording failed"),
+                "path": str(path) if path.exists() else None,
+                "duration_s": duration,
+                "elapsed_ms": elapsed_ms,
+                "bytes": path.stat().st_size if path.exists() else 0,
+                "device": status.selected_microphone,
+            }
+        except Exception as exc:
+            result = {"ok": False, "detail": str(exc), "path": None, "duration_s": duration, "device": status.selected_microphone}
+        self._set_recording(result)
+        return result
+
+    def transcribe(self, wav_path: str | None) -> dict[str, Any]:
+        if not wav_path:
+            result = {"ok": False, "detail": "no recording path", "text": ""}
+            self._set_transcript(result)
+            return result
+
+        model_path = discover_whisper_model()
+        if not model_path:
+            result = {"ok": False, "detail": "faster-whisper model not found", "text": ""}
+            self._set_transcript(result)
+            return result
+
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+
+            started = time.monotonic()
+            if self._whisper_model is None or self._whisper_model_path != model_path:
+                self._whisper_model = WhisperModel(model_path, device="cpu", compute_type="int8", local_files_only=True)
+                self._whisper_model_path = model_path
+            load_ms = (time.monotonic() - started) * 1000.0
+            started_transcribe = time.monotonic()
+            segments, info = self._whisper_model.transcribe(
+                wav_path,
+                language="en",
+                beam_size=1,
+                vad_filter=False,
+                condition_on_previous_text=False,
+            )
+            text = " ".join(segment.text.strip() for segment in segments).strip()
+            elapsed_ms = (time.monotonic() - started_transcribe) * 1000.0
+            result = {
+                "ok": True,
+                "detail": "transcribed",
+                "text": text,
+                "elapsed_ms": elapsed_ms,
+                "model_load_ms": load_ms,
+                "model": model_path,
+                "duration_s": getattr(info, "duration", None),
+            }
+        except Exception as exc:
+            result = {"ok": False, "detail": str(exc), "text": "", "model": model_path}
+        self._set_transcript(result)
+        return result
+
+    def listen(self, duration_s: float = 3.0) -> dict[str, Any]:
+        recording = self.record(duration_s)
+        transcript = self.transcribe(recording.get("path")) if recording.get("ok") else {"ok": False, "detail": recording.get("detail"), "text": ""}
+        return {"ok": bool(recording.get("ok")) and bool(transcript.get("ok")), "recording": recording, "transcript": transcript}
+
+    def speak_async(self, text: str, playback_device: str | None = None) -> dict[str, Any]:
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            return {"ok": False, "detail": "empty text", "text": clean_text}
+        piper_binary, piper_model = discover_piper()
+        status = self.probe_status
+        device = playback_device or status.selected_speaker
+        if not piper_binary or not piper_model:
+            result = {"ok": False, "detail": "piper unavailable", "text": clean_text}
+            self._set_tts(result)
+            return result
+        if not device or not shutil.which("aplay"):
+            result = {"ok": False, "detail": "speaker/aplay unavailable", "text": clean_text}
+            self._set_tts(result)
+            return result
+        thread = threading.Thread(target=self.speak, args=(text, playback_device), daemon=True)
+        thread.start()
+        return {"ok": True, "detail": "speech started", "text": clean_text, "device": device}
+
+    def speak(self, text: str, playback_device: str | None = None) -> dict[str, Any]:
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            result = {"ok": False, "detail": "empty text"}
+            self._set_tts(result)
+            return result
+
+        piper_binary, piper_model = discover_piper()
+        status = self.probe_status
+        device = playback_device or status.selected_speaker
+        if not piper_binary or not piper_model:
+            result = {"ok": False, "detail": "piper unavailable", "text": clean_text}
+            self._set_tts(result)
+            return result
+        if not device or not shutil.which("aplay"):
+            result = {"ok": False, "detail": "speaker/aplay unavailable", "text": clean_text}
+            self._set_tts(result)
+            return result
+
+        wav_path = self.cache_dir / f"{hashlib.sha1(clean_text.encode('utf-8')).hexdigest()}.wav"
+        started = time.monotonic()
+        generated = False
+        try:
+            if not wav_path.exists():
+                proc = subprocess.run(
+                    [piper_binary, "--model", piper_model, "--output_file", str(wav_path)],
+                    input=clean_text + "\n",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=25,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr.strip() or "piper failed")
+                generated = True
+            gen_ms = (time.monotonic() - started) * 1000.0
+            play_started = time.monotonic()
+            proc = subprocess.run(["aplay", "-q", "-D", device, str(wav_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.strip() or "aplay failed")
+            result = {
+                "ok": True,
+                "detail": "spoken",
+                "text": clean_text,
+                "path": str(wav_path),
+                "generated": generated,
+                "generate_ms": gen_ms,
+                "play_ms": (time.monotonic() - play_started) * 1000.0,
+                "device": device,
+            }
+        except Exception as exc:
+            result = {"ok": False, "detail": str(exc), "text": clean_text, "path": str(wav_path), "device": device}
+        self._set_tts(result)
+        return result
+
+    def _set_recording(self, result: dict[str, Any]) -> None:
+        with self.lock:
+            self.probe_status.last_recording = result
+
+    def _set_transcript(self, result: dict[str, Any]) -> None:
+        with self.lock:
+            self.probe_status.last_transcript = result
+
+    def _set_tts(self, result: dict[str, Any]) -> None:
+        with self.lock:
+            self.probe_status.last_tts = result
+
+
+def run_text(command: list[str], timeout: float = 5.0) -> str:
+    try:
+        proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
+        return proc.stdout
+    except Exception:
+        return ""
+
+
+def parse_alsa_devices(output: str, kind: str) -> list[AudioDevice]:
+    devices: list[AudioDevice] = []
+    for line in output.splitlines():
+        match = CAPTURE_RE.search(line.strip())
+        if not match:
+            continue
+        card_id = match.group("card_id").strip()
+        card_name = match.group("card_name").strip()
+        device = match.group("device").strip()
+        device_name = match.group("device_name").strip()
+        alsa_id = f"plughw:CARD={card_id},DEV={device}"
+        name = f"{card_name} / {device_name}"
+        devices.append(
+            AudioDevice(
+                id=alsa_id,
+                name=name,
+                kind=kind,
+                card=match.group("card").strip(),
+                device=device,
+                detail=line.strip(),
+                preferred=is_preferred_audio(name, kind),
+            )
+        )
+    return devices
+
+
+def is_preferred_audio(name: str, kind: str) -> bool:
+    text = name.lower()
+    if kind == "capture":
+        return any(token in text for token in ("camera", "webcam", "usb", "mic", "microphone"))
+    return any(token in text for token in ("headphone", "speaker", "usb", "audio"))
+
+
+def select_capture_device(devices: list[AudioDevice]) -> AudioDevice | None:
+    for device in devices:
+        if device.preferred:
+            return device
+    return devices[0] if devices else None
+
+
+def select_playback_device(devices: list[AudioDevice]) -> AudioDevice | None:
+    for device in devices:
+        if "headphone" in device.name.lower():
+            device.preferred = True
+            return device
+    for device in devices:
+        if device.preferred:
+            return device
+    return devices[0] if devices else None
+
+
+def package_available(name: str) -> bool:
+    try:
+        __import__(name)
+        return True
+    except Exception:
+        return False
+
+
+def discover_whisper_model() -> str | None:
+    env = os.environ.get("PLUTO_WHISPER_MODEL")
+    candidates = [
+        env,
+        "/home/pi/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356",
+        "/home/pi/.cache/whisper/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356",
+        "/home/pi/pluto-v2/models/whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate, "model.bin").exists():
+            return candidate
+    return None
+
+
+def discover_piper() -> tuple[str | None, str | None]:
+    binary = os.environ.get("PLUTO_PIPER_BIN") or shutil.which("piper") or "/home/pi/pluto-v2/piper/piper"
+    model = os.environ.get("PLUTO_PIPER_MODEL") or "/home/pi/pluto-v2/models/en_US-lessac-medium.onnx"
+    if not binary or not Path(binary).exists():
+        return None, model if Path(model).exists() else None
+    if not model or not Path(model).exists():
+        return binary, None
+    return binary, model

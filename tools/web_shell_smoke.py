@@ -69,6 +69,7 @@ def main() -> int:
         assert "error" in status
         assert "manual" in status
         assert "talk" in status
+        assert "audio" in status
         assert "allowed_next_states" in status
         assert "transition_log" in status["mode_manager"]
 
@@ -76,6 +77,12 @@ def main() -> int:
         assert camera_code == 200, camera_code
         camera = json.loads(raw_camera.decode("utf-8"))
         assert "available" in camera
+
+        audio_code, raw_audio = request("/api/audio/status")
+        assert audio_code == 200, audio_code
+        audio = json.loads(raw_audio.decode("utf-8"))
+        assert "microphone_available" in audio
+        assert "speaker_available" in audio
 
         jpg_code, _ = request("/camera.jpg")
         assert jpg_code in {200, 503}, jpg_code

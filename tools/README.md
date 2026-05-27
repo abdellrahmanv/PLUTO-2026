@@ -100,3 +100,37 @@ Useful endpoints:
 
 The camera service uses threaded capture, frame skipping, MJPG, low resolution,
 YOLOv8n float16 TFLite human detection, and warmup-frame suppression.
+
+## Phase 9 - WELCOME Audio And Simple Talk
+
+Run the local deterministic answer and website talk smoke test:
+
+```bash
+python3 tools/welcome_talk_smoke.py
+```
+
+Run the audio detector. On the Raspberry Pi with the webcam connected, require
+the camera microphone and record one second:
+
+```bash
+/home/pi/yolo/env/bin/python tools/audio_io_smoke.py --require-microphone --record-probe
+```
+
+Useful endpoints:
+
+```text
+/api/audio/status
+/api/audio/refresh
+/api/audio/speak
+/api/welcome/talk
+/api/welcome/listen
+```
+
+Expected Pi evidence:
+
+```text
+selected_microphone = plughw:CARD=camera,DEV=0
+stt_backend = faster-whisper
+tts_backend = piper
+AUDIO_IO_SMOKE PASS
+```
