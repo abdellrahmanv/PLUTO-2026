@@ -99,20 +99,25 @@ class Stm32SerialLink:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
 
-    def send_stop(self, wait_ack: bool = True, timeout_s: float = 0.2) -> dict[str, Any]:
-        with self._lock:
-            before = self._status.ack_stop_count
-        ok, detail = self.send_command("CMD:STOP")
-        if not ok or not wait_ack:
-            return {"ok": ok, "detail": detail}
-
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+    def send_stop(self, wait_ack: bool = True, timeout_s: float = 0.45, retries: int = 3) -> dict[str, Any]:
+        attempts = max(1, int(retries))
+        last_detail = "not sent"
+        for attempt in range(1, attempts + 1):
             with self._lock:
-                if self._status.ack_stop_count > before:
-                    return {"ok": True, "detail": "ACK:STOP"}
-            time.sleep(0.01)
-        return {"ok": False, "detail": "STOP sent but ACK:STOP not received within 200 ms"}
+                before = self._status.ack_stop_count
+            ok, detail = self.send_command("CMD:STOP")
+            last_detail = detail
+            if not ok or not wait_ack:
+                return {"ok": ok, "detail": detail, "attempts": attempt}
+
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self._status.ack_stop_count > before:
+                        return {"ok": True, "detail": "ACK:STOP", "attempts": attempt}
+                time.sleep(0.01)
+            last_detail = f"STOP sent but ACK:STOP not received within {int(timeout_s * 1000)} ms"
+        return {"ok": False, "detail": last_detail, "attempts": attempts}
 
     def send_drive(self, speed: int, steer: int, wait_ack: bool = True, timeout_s: float = 0.2) -> dict[str, Any]:
         with self._lock:

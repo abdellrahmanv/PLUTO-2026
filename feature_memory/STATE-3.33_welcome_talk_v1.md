@@ -90,7 +90,8 @@ External dependencies:
 
 The web API only answers while the mode manager is in `WELCOME`. Before
 answering, the Pi sends a stop guard to STM32 so wheel motion stays zero during
-talk.
+talk. The persistent STM32 link retries `CMD:STOP` up to three times because a
+single `ACK:STOP` can be delayed while telemetry is arriving.
 
 Normal flow:
 
@@ -180,7 +181,7 @@ response="Short question please."
 | Failure | Likely Cause | Diagnostic | Recovery |
 | --- | --- | --- | --- |
 | Talk rejected | Not in WELCOME | Check `current_state` | Enter WELCOME first |
-| Stop guard fails | STM32 disconnected or no ACK | Check `stop_guard` and STM32 runtime | Fix STM32 link before TALK |
+| Stop guard fails | STM32 disconnected or no repeated ACK | Check `stop_guard.attempts` and STM32 runtime | Fix STM32 link before TALK |
 | Wrong answer | Missing trigger or STT error | Check `normalized_text` and `score` | Add trigger or response |
 | Long input blocked | More than 9 words | Check `input_words` | Ask shorter question |
 
