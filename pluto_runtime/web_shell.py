@@ -469,6 +469,7 @@ class PlutoWebContext:
             return {"ok": False, "payload": result}
 
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+        stop = self.degraded_stop_guard_if_safe(stop)
         if self.hardware["stm32"].connected and not stop.get("ok"):
             self.talk_last_notice = "Stop guard failed."
             transition = self.mode_manager.enter_error("Unable to verify stopped wheels before WELCOME_TALK", source="welcome_talk")
@@ -483,6 +484,33 @@ class PlutoWebContext:
             return {"ok": False, "payload": result}
 
         return {"ok": True, "stop": stop}
+
+    def degraded_stop_guard_if_safe(self, stop: dict[str, Any]) -> dict[str, Any]:
+        if stop.get("ok") or self.stm32_link is None:
+            return stop
+        runtime = self.stm32_link.get_status()
+        now = time.time()
+        recent_link = bool(runtime.running and runtime.last_seen and now - runtime.last_seen <= 2.0)
+        telemetry_speed = runtime.telemetry.get("SPD") if runtime.telemetry else None
+        try:
+            speed_zero = abs(float(telemetry_speed or 0.0)) <= 0.01
+        except (TypeError, ValueError):
+            speed_zero = False
+        manual_zero = self.manual.speed_intent == 0 and self.manual.steer_intent == 0
+        if recent_link and speed_zero and manual_zero:
+            degraded = dict(stop)
+            degraded.update(
+                {
+                    "ok": True,
+                    "acknowledged": False,
+                    "degraded": True,
+                    "original_detail": stop.get("detail"),
+                    "detail": "STOP sent; ACK missing, link alive, speed zero",
+                }
+            )
+            self.log("warn", f"WELCOME_TALK using degraded stop guard: {stop.get('detail')}")
+            return degraded
+        return stop
 
     def answer_welcome_talk(self, text: str, stop: dict[str, Any], speak: bool = False) -> dict[str, Any]:
         self.mode_manager.set_substate("WELCOME_TALK", return_lock=False)

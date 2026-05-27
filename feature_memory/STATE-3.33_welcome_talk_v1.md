@@ -91,7 +91,10 @@ External dependencies:
 The web API only answers while the mode manager is in `WELCOME`. Before
 answering, the Pi sends a stop guard to STM32 so wheel motion stays zero during
 talk. The persistent STM32 link retries `CMD:STOP` up to three times because a
-single `ACK:STOP` can be delayed while telemetry is arriving.
+single `ACK:STOP` can be delayed while telemetry is arriving. If the ACK is
+still missing but the STM32 link is recent, wheel speed telemetry is zero, and
+manual intent is zero, WELCOME_TALK may proceed in a logged degraded guard mode
+because this state is speech-only.
 
 Normal flow:
 
@@ -181,14 +184,16 @@ response="Short question please."
 | Failure | Likely Cause | Diagnostic | Recovery |
 | --- | --- | --- | --- |
 | Talk rejected | Not in WELCOME | Check `current_state` | Enter WELCOME first |
-| Stop guard fails | STM32 disconnected or no repeated ACK | Check `stop_guard.attempts` and STM32 runtime | Fix STM32 link before TALK |
+| Stop ACK buried | Alert/telemetry flood from STM32 | Check `stop_guard.degraded` and speed telemetry | Speech-only TALK may continue |
+| Stop guard fails | STM32 disconnected or nonzero speed | Check `stop_guard.attempts` and STM32 runtime | Fix STM32 link before TALK |
 | Wrong answer | Missing trigger or STT error | Check `normalized_text` and `score` | Add trigger or response |
 | Long input blocked | More than 9 words | Check `input_words` | Ask shorter question |
 
 ## Safety Notes
 
 WELCOME_TALK v1 sends no wheel or arm movement. It requires WELCOME state and
-uses a `CMD:STOP` guard before answering.
+uses a `CMD:STOP` guard before answering. Degraded guard mode is allowed only
+when STM32 is alive and speed telemetry is zero.
 
 ## Open Questions
 
