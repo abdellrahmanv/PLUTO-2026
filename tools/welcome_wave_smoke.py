@@ -124,6 +124,24 @@ def run_detector_checks() -> None:
     assert confirmed_status.reason == "confirmed_wave", confirmed_status
     assert confirmed_status.direction_changes >= 2, confirmed_status
 
+    detector = SimpleWaveDetector(cooldown_s=0.5)
+    balances = [-0.7, 0.6, -0.65, 0.7, -0.6, 0.65, -0.7, 0.6]
+    confirmed_status = None
+    for index, balance in enumerate(balances):
+        status = detector.update(
+            {
+                **base,
+                "detections": [{"bbox": [105, 60, 215, 260], "confidence": 0.86}],
+                "wave_motion": {"motion_norm": 0.045, "balance": balance},
+            },
+            now=float(index) * 0.2,
+        )
+        if status.confirmed:
+            confirmed_status = status
+    assert confirmed_status is not None, status
+    assert confirmed_status.reason == "confirmed_wave", confirmed_status
+    assert confirmed_status.motion_direction_changes >= 2, confirmed_status
+
 
 def main() -> int:
     args = parse_args()

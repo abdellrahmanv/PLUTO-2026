@@ -19,6 +19,8 @@ class WaveSample:
     center_x: float
     width: float
     confidence: float
+    motion_norm: float = 0.0
+    motion_balance: float = 0.0
 
 
 @dataclass
@@ -33,6 +35,8 @@ class WaveStatus:
     direction_changes: int = 0
     amplitude_norm: float = 0.0
     width_change_norm: float = 0.0
+    motion_norm: float = 0.0
+    motion_direction_changes: int = 0
     target_id: str | None = None
     cooldown_remaining_s: float = 0.0
     last_confirmed_at: float | None = None
@@ -51,6 +55,8 @@ class SimpleWaveDetector:
         min_direction_changes: int = 2,
         min_amplitude_norm: float = 0.045,
         min_width_change_norm: float = 0.065,
+        min_motion_norm: float = 0.018,
+        min_motion_direction_changes: int = 2,
         min_confidence: float = 0.30,
         cooldown_s: float = 4.0,
     ) -> None:
@@ -59,6 +65,8 @@ class SimpleWaveDetector:
         self.min_direction_changes = min_direction_changes
         self.min_amplitude_norm = min_amplitude_norm
         self.min_width_change_norm = min_width_change_norm
+        self.min_motion_norm = min_motion_norm
+        self.min_motion_direction_changes = min_motion_direction_changes
         self.min_confidence = min_confidence
         self.cooldown_s = cooldown_s
         self.samples: deque[WaveSample] = deque(maxlen=48)
@@ -86,7 +94,15 @@ class SimpleWaveDetector:
         bbox = target.get("bbox") or [0, 0, 0, 0]
         x1, _y1, x2, _y2 = [float(value) for value in bbox]
         confidence = float(target.get("confidence") or 0.0)
-        sample = WaveSample(timestamp=now, center_x=(x1 + x2) / 2.0, width=max(1.0, x2 - x1), confidence=confidence)
+        motion = camera_status.get("wave_motion") or {}
+        sample = WaveSample(
+            timestamp=now,
+            center_x=(x1 + x2) / 2.0,
+            width=max(1.0, x2 - x1),
+            confidence=confidence,
+            motion_norm=float(motion.get("motion_norm") or 0.0),
+            motion_balance=float(motion.get("balance") or 0.0),
+        )
         self.samples.append(sample)
         self._trim(now)
 
@@ -120,14 +136,28 @@ class SimpleWaveDetector:
             return self._status(False, "low_confidence", frame_width, now, cooldown)
 
         direction_changes = count_direction_changes([item.center_x for item in self.samples])
+        motion_direction_changes = count_direction_changes([item.motion_balance for item in self.samples], deadband=0.18)
         amplitude_norm = (max(item.center_x for item in self.samples) - min(item.center_x for item in self.samples)) / frame_width
         width_change_norm = (max(item.width for item in self.samples) - min(item.width for item in self.samples)) / frame_width
-        if direction_changes < self.min_direction_changes:
+        motion_norm = sum(item.motion_norm for item in self.samples) / max(len(self.samples), 1)
+        box_wave = direction_changes >= self.min_direction_changes and (
+            amplitude_norm >= self.min_amplitude_norm or width_change_norm >= self.min_width_change_norm
+        )
+        pixel_wave = motion_direction_changes >= self.min_motion_direction_changes and motion_norm >= self.min_motion_norm
+        if not box_wave and not pixel_wave:
+            if motion_norm < self.min_motion_norm and amplitude_norm < self.min_amplitude_norm and width_change_norm < self.min_width_change_norm:
+                return self._status(False, "amplitude_too_low", frame_width, now, cooldown)
             return self._status(False, "not_enough_direction_changes", frame_width, now, cooldown)
-        if amplitude_norm < self.min_amplitude_norm and width_change_norm < self.min_width_change_norm:
-            return self._status(False, "amplitude_too_low", frame_width, now, cooldown)
 
-        score = min(1.0, max(amplitude_norm / self.min_amplitude_norm, width_change_norm / self.min_width_change_norm) / 2.0)
+        score = min(
+            1.0,
+            max(
+                amplitude_norm / self.min_amplitude_norm,
+                width_change_norm / self.min_width_change_norm,
+                motion_norm / self.min_motion_norm,
+            )
+            / 2.0,
+        )
         return self._status(True, "confirmed_wave", frame_width, now, cooldown, score=score)
 
     def _status(self, confirmed: bool, reason: str, frame_width: float, now: float, cooldown: float, score: float = 0.0) -> WaveStatus:
@@ -135,11 +165,14 @@ class SimpleWaveDetector:
         direction_changes = count_direction_changes([item.center_x for item in samples])
         amplitude_norm = 0.0
         width_change_norm = 0.0
+        motion_norm = 0.0
+        motion_direction_changes = count_direction_changes([item.motion_balance for item in samples], deadband=0.18)
         confidence = 0.0
         side = "unknown"
         if samples:
             amplitude_norm = (max(item.center_x for item in samples) - min(item.center_x for item in samples)) / frame_width
             width_change_norm = (max(item.width for item in samples) - min(item.width for item in samples)) / frame_width
+            motion_norm = sum(item.motion_norm for item in samples) / max(len(samples), 1)
             confidence = sum(item.confidence for item in samples) / max(len(samples), 1)
             side = "right" if samples[-1].center_x >= samples[0].center_x else "left"
         return WaveStatus(
@@ -153,6 +186,8 @@ class SimpleWaveDetector:
             direction_changes=direction_changes,
             amplitude_norm=amplitude_norm,
             width_change_norm=width_change_norm,
+            motion_norm=motion_norm,
+            motion_direction_changes=motion_direction_changes,
             target_id="human_0" if samples else None,
             cooldown_remaining_s=cooldown,
             last_confirmed_at=self.last_confirmed_at,

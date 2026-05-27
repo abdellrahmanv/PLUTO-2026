@@ -716,12 +716,13 @@ WELCOME_DONE
 | STATE-3.12 | Future wave detection shall require multiple frames above confidence threshold. | Pi | Vision test |
 | STATE-3.12.1 | Wave detection shall not directly command wheels or arm movement. | Pi | Command log |
 | STATE-3.12.2 | Wave detection shall only request WELCOME entry through the mode manager. | Pi | Mode log |
-| STATE-3.12.3 | Wave detection shall require a raised wrist and side-to-side motion pattern before confirming intent. | Pi | Vision debug log |
+| STATE-3.12.3 | Wave detection v1 shall require repeated side-to-side upper-body/hand-region motion before confirming intent. | Pi | Vision debug log |
 | STATE-3.12.4 | Wave detection shall use a confirmation window and cooldown to prevent rapid repeat triggers. | Pi | Trigger debounce test |
 | STATE-3.12.5 | Wave detection shall expose debug evidence: target ID, side, score, confidence, and confirmation reason. | Pi | Debug log review |
 | STATE-3.12.6 | If pose or wave dependencies are unavailable, WELCOME shall fall back to operator/web trigger. | Pi | Missing dependency test |
 | STATE-3.12.7 | Wave detection shall be implemented inside `WELCOME_DETECT`, not as a separate robot mode. | Pi | Mode/substate log |
 | STATE-3.12.8 | WELCOME wave v1 shall use lightweight existing camera detections before adding heavy pose dependencies. | Pi | Wave smoke test |
+| STATE-3.12.9 | WELCOME wave v1 shall expose pixel-motion evidence from the upper human crop so real hand waves can be tuned without loading a pose model. | Pi | Wave debug log |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |

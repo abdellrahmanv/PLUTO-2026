@@ -25,6 +25,7 @@ STATE-3.12.5
 STATE-3.12.6
 STATE-3.12.7
 STATE-3.12.8
+STATE-3.12.9
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -141,7 +142,8 @@ Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
 2. Watch the largest human box over a short time window.
-3. Confirm only repeated lateral/width motion with direction changes.
+3. Confirm repeated lateral/width motion or repeated upper-crop pixel motion
+   with direction changes.
 4. Publish a structured event:
 
 ```text
@@ -168,9 +170,11 @@ POST /api/welcome/wave-trigger
 ```
 
 This v1 detector is intentionally simpler than the local prototype. It does
-not prove wrist motion. It produces a conservative wave-like intent candidate
-from the existing person boxes and still depends on the mode manager and STM32
-stop guard before WELCOME entry.
+not prove wrist landmarks. It produces a conservative wave-like intent
+candidate from the existing person boxes plus a tiny pixel-motion estimate in
+the upper human crop. This catches real hand waves when the full person box is
+stable, while still depending on the mode manager and STM32 stop guard before
+WELCOME entry.
 
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
@@ -227,6 +231,7 @@ Website impact:
 - Show wave detector state when enabled.
 - Show selected target ID and confidence.
 - Show detector reason, sample count, score, confidence, side, and latest event.
+- Show `motion_norm` and `motion_direction_changes` so hand-wave tuning is visible.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -297,3 +302,4 @@ WELCOME.
 | 2026-05-27 | Merged follow-wave into WELCOME | Keep wave as WELCOME_DETECT trigger, not a separate robot mode |
 | 2026-05-27 | Added lightweight v1 wave detector | Use existing camera boxes and avoid heavy pose dependencies |
 | 2026-05-27 | Reused degraded stop guard for wave trigger | Keep hardware validation consistent with WELCOME_TALK |
+| 2026-05-27 | Added upper-crop pixel motion evidence | Detect hand waves without requiring pose landmarks |

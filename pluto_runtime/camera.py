@@ -42,6 +42,7 @@ class CameraStatus:
     warmup_remaining: int = 0
     detections: list[HumanDetection] = field(default_factory=list)
     human_count: int = 0
+    wave_motion: dict[str, Any] = field(default_factory=dict)
     detector_status: str = "not_started"
     model_path: str | None = None
     error: str | None = None
@@ -413,6 +414,8 @@ class CameraService:
         self.lock = threading.Lock()
         self.latest_jpeg: bytes | None = None
         self.latest_detections: list[HumanDetection] = []
+        self.latest_wave_motion: dict[str, Any] = {"available": False, "reason": "not_started"}
+        self.previous_wave_roi = None
         self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
@@ -482,6 +485,8 @@ class CameraService:
                 elif time.monotonic() - self.last_positive_detection_time > self.detection_hold_s:
                     self.latest_detections = []
 
+            wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections)
+
             annotated = frame.copy()
             self._draw_overlay(cv2, annotated, self.latest_detections)
             ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 75])
@@ -494,7 +499,53 @@ class CameraService:
                         self.stream_fps_value = self.stream_frame_count / elapsed
                         self.stream_frame_count = 0
                         self.last_stream_fps_time = time.monotonic()
+                    self.latest_wave_motion = wave_motion
                     self.status = self._build_status(available=True, running=True, warmup_remaining=warmup_remaining)
+
+    def _estimate_wave_motion(self, cv2, frame, detections: list[HumanDetection]) -> dict[str, Any]:
+        if not detections:
+            self.previous_wave_roi = None
+            return {"available": False, "reason": "no_person"}
+
+        det = max(detections, key=lambda item: max(0, item.bbox[2] - item.bbox[0]) * max(0, item.bbox[3] - item.bbox[1]))
+        height, width = frame.shape[:2]
+        x1, y1, x2, y2 = det.bbox
+        box_w = max(1, x2 - x1)
+        box_h = max(1, y2 - y1)
+        pad_x = int(box_w * 0.18)
+        top = max(0, y1)
+        bottom = min(height, y1 + int(box_h * 0.62))
+        left = max(0, x1 - pad_x)
+        right = min(width, x2 + pad_x)
+        if right - left < 16 or bottom - top < 16:
+            self.previous_wave_roi = None
+            return {"available": False, "reason": "roi_too_small"}
+
+        crop = frame[top:bottom, left:right]
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+        roi = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
+        if self.previous_wave_roi is None:
+            self.previous_wave_roi = roi
+            return {"available": True, "reason": "priming", "motion_norm": 0.0, "balance": 0.0}
+
+        diff = cv2.absdiff(roi, self.previous_wave_roi)
+        self.previous_wave_roi = roi
+        active = diff > 18
+        motion_norm = float(active.mean())
+        left_motion = float(active[:, :32].mean())
+        right_motion = float(active[:, 32:].mean())
+        total = left_motion + right_motion
+        balance = (right_motion - left_motion) / total if total > 0 else 0.0
+        return {
+            "available": True,
+            "reason": "ok",
+            "motion_norm": motion_norm,
+            "balance": balance,
+            "left_motion": left_motion,
+            "right_motion": right_motion,
+            "bbox": det.bbox,
+            "confidence": det.confidence,
+        }
 
     def _draw_overlay(self, cv2, frame, detections: list[HumanDetection]) -> None:
         for det in detections:
@@ -530,6 +581,7 @@ class CameraService:
             warmup_remaining=warmup_remaining,
             detections=detections,
             human_count=len(detections),
+            wave_motion=dict(self.latest_wave_motion),
             detector_status=detector.status if detector else "unavailable",
             model_path=self.model_path,
             error=error or self.error,
