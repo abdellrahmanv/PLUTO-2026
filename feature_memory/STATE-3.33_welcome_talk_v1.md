@@ -28,6 +28,7 @@ STATE-3.33.4
 STATE-3.33.5
 STATE-3.33.6
 STATE-3.33.11
+STATE-3.33.12
 STATE-3.35
 STATE-3.37
 ```
@@ -116,6 +117,7 @@ Current bank coverage:
 ```text
 identity: name, project, builders, version
 location/demo: MSA University in Egypt, graduation demo, weather
+MSA knowledge: official facts, faculties, contacts, partners, campus numbers
 system: modes, website, STM32, Raspberry Pi, hoverboard, Uno
 safety: stop, obstacle, distance, human safety, camera avoidance
 interaction: greeting, goodbye, thanks, welcome wave, approach
@@ -130,6 +132,7 @@ Exact demo facts locked by smoke tests:
 "where are you" -> "MSA University in Egypt."
 "who made pluto" -> "Abdelrahman and Hamza built me."
 "weather" -> "It is slightly hot today."
+"what means msa" -> "October University for Modern Sciences and Arts."
 ```
 
 ## How To Run
@@ -211,6 +214,7 @@ response="Short question please."
 | VER-TALK-003 | Response bank audit | all responses <= 9 words | local pass |
 | VER-TALK-005 | No internet/API keys | engine imports no cloud dependency | local pass |
 | VER-TALK-006 | Demo fact prompts | location/builders/weather exact answers | local pass |
+| VER-TALK-007 | MSA knowledge prompts | official MSA facts answer locally | local pass |
 
 ## Failure Modes
 
@@ -239,3 +243,4 @@ when STM32 is alive and speed telemetry is zero.
 | --- | --- | --- |
 | 2026-05-27 | Initial implementation memory | WELCOME_TALK v1 answer engine added |
 | 2026-05-27 | Expanded demo bank | Add MSA University, builders, weather, safety, and interaction facts |
+| 2026-05-27 | Added MSA knowledge bank | Add short official-source facts about MSA University |

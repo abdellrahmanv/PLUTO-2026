@@ -790,6 +790,7 @@ WELCOME_DONE
 | STATE-3.33.9 | WELCOME_TALK v1 shall include a broad keyword bank before any LLM fallback is enabled. | Pi | Response bank test |
 | STATE-3.33.10 | Website WELCOME_TALK shall support text ask, ask-and-speak, and camera-mic listen controls. | Pi | UI/API test |
 | STATE-3.33.11 | WELCOME_TALK v1 shall answer configured demo identity facts exactly, including location, builders, and simple weather. | Pi | Response bank test |
+| STATE-3.33.12 | WELCOME_TALK v1 shall include an offline MSA University knowledge bank sourced from official university pages. | Pi | MSA response bank test |
 
 ### WELCOME_TALK Version Roadmap
 

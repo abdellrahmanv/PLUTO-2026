@@ -440,6 +440,7 @@ Features:
 - 9-word talk input/output limits
 - keyword-first answer strategy
 - large deterministic keyword bank
+- offline MSA University knowledge bank
 - fully offline v1 talk path
 - camera microphone detection
 - headset microphone override/testing
@@ -462,6 +463,7 @@ Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
 Talk answer          -> keyword-first, max 9 words
 Talk facts           -> MSA University, Abdelrahman/Hamza, slightly hot
+MSA knowledge        -> official-source university facts answer locally
 Talk v1              -> offline, no API keys, no cloud calls
 Camera mic           -> detected as selected microphone
 Headset mic          -> selected by website/API/tool override
@@ -488,6 +490,7 @@ WELCOME_TALK v1 implementation memory:
 
 ```text
 feature_memory/STATE-3.33_welcome_talk_v1.md
+feature_memory/STATE-3.33.12_msa_knowledge_bank.md
 feature_memory/AUD-001_audio_io_v1.md
 tools/welcome_talk_smoke.py
 tools/audio_io_smoke.py

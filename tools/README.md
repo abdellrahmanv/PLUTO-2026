@@ -109,6 +109,17 @@ Run the local deterministic answer and website talk smoke test:
 python3 tools/welcome_talk_smoke.py
 ```
 
+The smoke test also audits the offline MSA University knowledge bank. Example
+questions include:
+
+```text
+what means msa
+who founded msa
+how many faculties
+msa address
+msa hotline
+```
+
 Run the audio detector. On the Raspberry Pi with the webcam connected, require
 the camera microphone and record one second:
 

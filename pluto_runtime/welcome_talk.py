@@ -113,7 +113,53 @@ INTENT_RULES: tuple[IntentRule, ...] = (
     IntentRule("weather", "It is slightly hot today.", ("weather", "how is weather", "hot today", "temperature", "is it hot")),
     IntentRule("team", "A focused team is building me.", ("team", "your team", "who works", "students")),
     IntentRule("school", "I am a serious graduation robot.", ("graduation", "university", "school project", "college")),
-    IntentRule("msa", "MSA is my first stage.", ("msa", "msa university", "modern sciences", "arts university")),
+    IntentRule("msa", "MSA is my first stage.", ("msa university", "modern sciences", "arts university")),
+    IntentRule("msa_full_name", "October University for Modern Sciences and Arts.", ("msa full name", "full name of msa", "what means msa", "msa meaning")),
+    IntentRule("msa_founder", "Dr. Nawal El Degwi established MSA.", ("who founded msa", "msa founder", "nawal el degwi", "dr nawal")),
+    IntentRule("msa_established", "MSA started in 1996.", ("when was msa established", "when started msa", "msa established")),
+    IntentRule("msa_british", "First British education in Egypt and Middle East.", ("british education", "first british", "why british", "british msa")),
+    IntentRule("msa_years", "MSA has thirty years of higher education.", ("msa years", "how many years msa", "thirty years", "30 years")),
+    IntentRule("msa_partnership_years", "MSA has twenty-six years of British partnership.", ("british partnership years", "uk partnership years", "26 years", "validation years")),
+    IntentRule("msa_faculty_count", "MSA has eleven faculties.", ("how many faculties", "faculties count", "msa faculties", "eleven faculties")),
+    IntentRule("msa_faculty_names", "Ask me one faculty at a time.", ("faculty names", "list faculties", "all faculties", "which faculties")),
+    IntentRule("msa_engineering", "Yes, MSA has Engineering.", ("engineering faculty", "does msa have engineering", "engineering at msa")),
+    IntentRule("msa_computer_science", "Yes, MSA has Computer Science.", ("computer science faculty", "cs faculty", "computer science at msa")),
+    IntentRule("msa_pharmacy", "Yes, MSA has Pharmacy.", ("pharmacy faculty", "pharmacy at msa", "does msa have pharmacy")),
+    IntentRule("msa_dentistry", "Yes, MSA has Dentistry.", ("dentistry faculty", "dentistry at msa", "does msa have dentistry")),
+    IntentRule("msa_biotechnology", "Yes, MSA has Biotechnology.", ("biotechnology faculty", "biotechnology at msa", "bio technology")),
+    IntentRule("msa_physical_therapy", "Yes, MSA has Physical Therapy.", ("physical therapy faculty", "physical therapy at msa", "therapy faculty")),
+    IntentRule("msa_arts_design", "Yes, MSA has Arts and Design.", ("arts design faculty", "arts and design", "design faculty")),
+    IntentRule("msa_management", "Yes, MSA has Management Sciences.", ("management faculty", "management sciences", "business faculty")),
+    IntentRule("msa_mass_comm", "Yes, MSA has Mass Communication.", ("mass communication", "mass comm", "media faculty")),
+    IntentRule("msa_languages", "Yes, MSA has Languages.", ("languages faculty", "languages at msa", "language faculty")),
+    IntentRule("msa_nutrition", "Yes, MSA has Nutrition and Food Technology.", ("nutrition faculty", "food technology", "nutrition at msa")),
+    IntentRule("msa_campus_size", "The campus is fifty acres.", ("campus size", "how big msa", "fifty acres", "50 acres")),
+    IntentRule("msa_green_area", "Forty percent is green area.", ("green area", "green campus", "msa green", "sustainable campus")),
+    IntentRule("msa_security", "MSA has eight hundred security cameras.", ("security cameras", "msa security", "safe campus", "800 cameras")),
+    IntentRule("msa_labs", "MSA has ninety-three scientific laboratories.", ("scientific labs", "laboratories", "how many labs", "93 labs")),
+    IntentRule("msa_graduates", "MSA has thirty-two thousand graduates.", ("graduates", "alumni count", "how many graduated", "32000 graduates")),
+    IntentRule("msa_jobs", "MSA lists six thousand alumni job vacancies.", ("job vacancies", "alumni jobs", "career vacancies", "6000 jobs")),
+    IntentRule("msa_computer_labs", "MSA has seven hundred labs and studios.", ("computer labs", "art studios", "700 labs", "studios")),
+    IntentRule("msa_activities_count", "MSA has eighteen student activities.", ("student activities count", "18 activities", "activities count")),
+    IntentRule("msa_uk_partners", "Greenwich and Bedfordshire are key UK partners.", ("uk partners", "british partners", "greenwich bedfordshire", "partner universities")),
+    IntentRule("msa_greenwich", "Greenwich validates seven MSA faculties.", ("greenwich", "university of greenwich", "greenwich validates")),
+    IntentRule("msa_bedfordshire", "Bedfordshire validates three MSA faculties.", ("bedfordshire", "university of bedfordshire", "bedfordshire validates")),
+    IntentRule("msa_global_partners", "MSA also lists Temple, Yunnan, and ACCA.", ("global partners", "temple university", "yunnan", "acca")),
+    IntentRule("msa_vision", "MSA aims for top 500 globally.", ("msa vision", "vision of msa", "top 500", "msa goal")),
+    IntentRule("msa_mission", "Quality education with British cooperation.", ("msa mission", "mission of msa", "what is msa mission")),
+    IntentRule("msa_values", "Quality, inclusion, credibility, loyalty, accountability, entrepreneurship.", ("msa values", "core values", "values of msa")),
+    IntentRule("msa_student_life", "Student life has clubs, activities, and events.", ("student life", "clubs", "campus life", "social life")),
+    IntentRule("msa_research", "MSA also focuses on scientific research.", ("research", "scientific research", "msa research")),
+    IntentRule("msa_address", "26 July Mehwar, Wahat Road, 6th October.", ("msa address", "where is msa", "msa location", "campus address")),
+    IntentRule("msa_hotline", "MSA hotline is 16672.", ("msa hotline", "hotline", "phone number", "contact msa")),
+    IntentRule("msa_landline", "Landline: 38371113 or 38371115.", ("msa landline", "landline", "telephone", "call msa")),
+    IntentRule("msa_email", "MSA email is info@msa.edu.eg.", ("msa email", "email msa", "info email")),
+    IntentRule("msa_admission_email", "Admission email is admission@msa.edu.eg.", ("admission email", "admissions email", "apply email")),
+    IntentRule("msa_work_time", "Saturday-Thursday, 08:00 to 3:15.", ("work time", "working hours", "when open", "msa hours")),
+    IntentRule("msa_services", "Services include library, e-learning, transport, support.", ("msa services", "library", "e learning", "transportation")),
+    IntentRule("msa_apply", "Apply through the MSA newcomers gateway.", ("how apply", "apply msa", "admission guide", "new applicant")),
+    IntentRule("msa_scholarships", "Fees and scholarships are under admissions.", ("tuition fees", "scholarships", "fees", "tuition")),
+    IntentRule("msa_general", "October University for Modern Sciences and Arts.", ("msa",)),
     IntentRule("abdelrahman", "Abdelrahman gave me direction.", ("abdelrahman", "who is abdelrahman")),
     IntentRule("hamza", "Hamza helped bring me alive.", ("hamza", "who is hamza")),
     IntentRule("language", "I answer best in simple English.", ("language", "arabic", "english", "speak arabic")),
@@ -234,6 +280,11 @@ class WelcomeTalkEngine:
                 trigger_tokens = set(trigger_norm.split())
                 if not trigger_tokens:
                     continue
+                if len(trigger_tokens) == 1:
+                    if next(iter(trigger_tokens)) in input_tokens:
+                        return rule.intent, rule.response, 1.0, "keyword"
+                    continue
+
                 if trigger_norm in normalized or trigger_tokens.issubset(input_tokens):
                     return rule.intent, rule.response, 1.0, "keyword"
 

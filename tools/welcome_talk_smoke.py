@@ -93,6 +93,36 @@ def run_engine_checks() -> None:
     assert weather.response == "It is slightly hot today."
     assert_word_limited(weather.response)
 
+    msa_name = engine.answer("what means msa")
+    assert msa_name.accepted is True
+    assert msa_name.intent == "msa_full_name"
+    assert msa_name.response == "October University for Modern Sciences and Arts."
+    assert_word_limited(msa_name.response)
+
+    msa_founder = engine.answer("who founded msa")
+    assert msa_founder.accepted is True
+    assert msa_founder.intent == "msa_founder"
+    assert msa_founder.response == "Dr. Nawal El Degwi established MSA."
+    assert_word_limited(msa_founder.response)
+
+    msa_faculties = engine.answer("how many faculties")
+    assert msa_faculties.accepted is True
+    assert msa_faculties.intent == "msa_faculty_count"
+    assert msa_faculties.response == "MSA has eleven faculties."
+    assert_word_limited(msa_faculties.response)
+
+    msa_address = engine.answer("msa address")
+    assert msa_address.accepted is True
+    assert msa_address.intent == "msa_address"
+    assert msa_address.response == "26 July Mehwar, Wahat Road, 6th October."
+    assert_word_limited(msa_address.response)
+
+    msa_hotline = engine.answer("msa hotline")
+    assert msa_hotline.accepted is True
+    assert msa_hotline.intent == "msa_hotline"
+    assert msa_hotline.response == "MSA hotline is 16672."
+    assert_word_limited(msa_hotline.response)
+
     fuzzy = engine.answer("who ar you")
     assert fuzzy.accepted is True
     assert fuzzy.intent == "name"
@@ -126,7 +156,7 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
     assert status["talk"]["max_input_words"] == 9
     assert status["talk"]["max_output_words"] == 9
     assert status["talk"]["ollama_fallback_enabled"] is False
-    assert status["talk"]["intent_count"] >= 90
+    assert status["talk"]["intent_count"] >= 130
     assert "audio" in status
 
     blocked_code, blocked_raw = request(base, "/api/welcome/talk", "POST", {"text": "what is your name"})
