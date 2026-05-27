@@ -115,6 +115,7 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
     if status["current_state"] != "WELCOME":
         assert blocked["accepted"] is False
         assert "only active in WELCOME" in blocked["reason"]
+        assert blocked["display_response"] == "Enter WELCOME first."
 
     if hardware_flow and status["hardware"]["stm32"]["connected"]:
         if status["current_state"] == "ERROR":

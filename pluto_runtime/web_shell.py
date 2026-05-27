@@ -113,6 +113,7 @@ class PlutoWebContext:
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
+        self.talk_last_notice = "Enter WELCOME, then ask a short question."
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
@@ -377,21 +378,25 @@ class PlutoWebContext:
 
     def welcome_talk(self, text: str) -> dict[str, Any]:
         if self.mode_manager.current_state != "WELCOME":
+            self.talk_last_notice = "Enter WELCOME first."
             result = {
                 "accepted": False,
                 "reason": "WELCOME_TALK is only active in WELCOME",
                 "state": self.mode_manager.current_state,
+                "display_response": self.talk_last_notice,
             }
             self.log("warn", f"WELCOME_TALK rejected: {result['reason']}")
             return result
 
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
         if self.hardware["stm32"].connected and not stop.get("ok"):
+            self.talk_last_notice = "Stop guard failed."
             transition = self.mode_manager.enter_error("Unable to verify stopped wheels before WELCOME_TALK", source="welcome_talk")
             self.log("error", f"WELCOME_TALK blocked by stop guard: {stop['detail']}")
             return {
                 "accepted": False,
                 "reason": "stop guard failed",
+                "display_response": self.talk_last_notice,
                 "stop_guard": stop,
                 "transition": transition.to_dict(),
             }
@@ -401,6 +406,7 @@ class PlutoWebContext:
         with self.lock:
             self.talk_last_result = talk_result
             self.talk_history.appendleft(talk_result)
+            self.talk_last_notice = talk_result.response
             self.log(
                 "talk" if talk_result.accepted else "warn",
                 f"WELCOME_TALK {talk_result.response_source} {talk_result.reason}: {talk_result.response}",
@@ -412,6 +418,7 @@ class PlutoWebContext:
             "substate": self.mode_manager.current_substate,
             "stop_guard": stop,
             "talk": talk_result.to_dict(),
+            "display_response": talk_result.response,
         }
 
     def forward_obstacle_reason(self, speed: int) -> str | None:
@@ -468,6 +475,7 @@ class PlutoWebContext:
     def talk_status(self) -> dict[str, Any]:
         return {
             **self.talk_engine.status(),
+            "last_notice": self.talk_last_notice,
             "last_result": self.talk_last_result.to_dict() if self.talk_last_result else None,
             "history": [item.to_dict() for item in list(self.talk_history)[:8]],
         }
@@ -923,6 +931,7 @@ def html_page() -> str:
         <div class="metric"><span class="label">Limits</span><span class="value" id="talkLimits">9 in / 9 out</span></div>
         <div class="metric"><span class="label">Source</span><span class="value" id="talkSource">none</span></div>
         <div class="metric"><span class="label">Latency</span><span class="value" id="talkLatency">none</span></div>
+        <div class="metric"><span class="label">Notice</span><span class="value" id="talkNotice">Enter WELCOME first</span></div>
         <div class="metric"><span class="label">Response</span><span class="value" id="talkResponse">none</span></div>
         <div class="talk-row">
           <input id="talkInput" maxlength="120" placeholder="Ask Pluto a short question">
@@ -1014,7 +1023,8 @@ def html_page() -> str:
       document.getElementById('talkLimits').textContent = `${{talk.max_input_words || 9}} in / ${{talk.max_output_words || 9}} out`;
       document.getElementById('talkSource').textContent = lastTalk ? `${{lastTalk.response_source}} / ${{lastTalk.intent || 'none'}}` : 'none';
       document.getElementById('talkLatency').textContent = lastTalk ? `${{lastTalk.latency_ms.toFixed(2)}} ms` : 'none';
-      document.getElementById('talkResponse').textContent = lastTalk ? lastTalk.response : 'none';
+      document.getElementById('talkNotice').textContent = talk.last_notice || 'Enter WELCOME first.';
+      document.getElementById('talkResponse').textContent = lastTalk ? lastTalk.response : (talk.last_notice || 'none');
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -1104,11 +1114,19 @@ def html_page() -> str:
     }});
     document.getElementById('talkAsk').addEventListener('click', async () => {{
       const input = document.getElementById('talkInput');
-      await api('/api/welcome/talk', {{
+      const result = await api('/api/welcome/talk', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{text: input.value}})
       }});
+      document.getElementById('talkNotice').textContent = result.display_response || result.reason || 'no response';
+      if (result.talk) {{
+        document.getElementById('talkResponse').textContent = result.talk.response;
+        document.getElementById('talkSource').textContent = `${{result.talk.response_source}} / ${{result.talk.intent || 'none'}}`;
+        document.getElementById('talkLatency').textContent = `${{result.talk.latency_ms.toFixed(2)}} ms`;
+      }} else {{
+        document.getElementById('talkResponse').textContent = result.display_response || result.reason || 'no response';
+      }}
       input.value = '';
       await refresh();
     }});

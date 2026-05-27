@@ -105,6 +105,7 @@ def main() -> int:
         talk = json.loads(talk_raw.decode("utf-8"))
         assert talk["accepted"] is False
         assert "WELCOME_TALK" in talk["reason"]
+        assert talk["display_response"] == "Enter WELCOME first."
 
         print("WEB_SHELL_SMOKE PASS")
         return 0
