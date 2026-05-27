@@ -142,9 +142,13 @@ Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
 2. Watch the largest human box over a short time window.
-3. Confirm repeated lateral/width motion or repeated upper-crop pixel motion
-   with direction changes.
-4. Publish a structured event:
+3. Extract a low-cost hand candidate from moving pixels inside an expanded
+   upper person crop.
+4. Apply the desktop prototype's rules without loading its heavy stack:
+   raised region, horizontal hand amplitude, x direction changes,
+   horizontal-dominates-vertical ratio, confirmation streak, and cooldown.
+5. Fall back to broad box/pixel motion if hand candidate evidence is imperfect.
+6. Publish a structured event:
 
 ```text
 WELCOME_TRIGGER:WAVE
@@ -169,12 +173,12 @@ Implemented API:
 POST /api/welcome/wave-trigger
 ```
 
-This v1 detector is intentionally simpler than the local prototype. It does
-not prove wrist landmarks. It produces a conservative wave-like intent
-candidate from the existing person boxes plus a tiny pixel-motion estimate in
-the upper human crop. This catches real hand waves when the full person box is
-stable, while still depending on the mode manager and STM32 stop guard before
-WELCOME entry.
+This v1 detector is intentionally lighter than the local prototype but now
+uses the same decision logic. It does not prove MediaPipe wrist landmarks.
+Instead it estimates a moving hand candidate from the expanded upper crop and
+feeds that into PC-style wave gates. This catches real hand waves when the full
+person box is stable, while still depending on the mode manager and STM32 stop
+guard before WELCOME entry.
 
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
@@ -231,7 +235,8 @@ Website impact:
 - Show wave detector state when enabled.
 - Show selected target ID and confidence.
 - Show detector reason, sample count, score, confidence, side, and latest event.
-- Show `motion_norm` and `motion_direction_changes` so hand-wave tuning is visible.
+- Show `motion_norm`, `motion_direction_changes`, `raised`, `hand_amp`,
+  `hand_sign_changes`, and `hand_dx_dy` so hand-wave tuning is visible.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -303,3 +308,4 @@ WELCOME.
 | 2026-05-27 | Added lightweight v1 wave detector | Use existing camera boxes and avoid heavy pose dependencies |
 | 2026-05-27 | Reused degraded stop guard for wave trigger | Keep hardware validation consistent with WELCOME_TALK |
 | 2026-05-27 | Added upper-crop pixel motion evidence | Detect hand waves without requiring pose landmarks |
+| 2026-05-27 | Ported PC wave rules into Pi-friendly detector | Keep raised/oscillating-hand behavior without YOLOv5, SORT, or MediaPipe runtime |

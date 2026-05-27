@@ -514,9 +514,9 @@ class CameraService:
         x1, y1, x2, y2 = det.bbox
         box_w = max(1, x2 - x1)
         box_h = max(1, y2 - y1)
-        pad_x = int(box_w * 0.18)
-        top = max(0, y1)
-        bottom = min(height, y1 + int(box_h * 0.62))
+        pad_x = int(box_w * 0.35)
+        top = max(0, y1 - int(box_h * 0.10))
+        bottom = min(height, y1 + int(box_h * 0.78))
         left = max(0, x1 - pad_x)
         right = min(width, x2 + pad_x)
         if right - left < 16 or bottom - top < 16:
@@ -534,6 +534,19 @@ class CameraService:
         self.previous_wave_roi = roi
         active = diff > 18
         motion_norm = float(active.mean())
+        hand_valid = motion_norm >= 0.006
+        hand_x_norm = 0.0
+        hand_y_norm = 1.0
+        raised_region = False
+        if hand_valid:
+            ys, xs = active.nonzero()
+            cx_roi = float(xs.mean()) / 63.0
+            cy_roi = float(ys.mean()) / 63.0
+            hand_x = left + cx_roi * max(1, right - left)
+            hand_y = top + cy_roi * max(1, bottom - top)
+            hand_x_norm = float((hand_x - ((x1 + x2) / 2.0)) / box_w)
+            hand_y_norm = float((hand_y - y1) / box_h)
+            raised_region = hand_y_norm <= 0.72
         left_motion = float(active[:, :32].mean())
         right_motion = float(active[:, 32:].mean())
         total = left_motion + right_motion
@@ -545,6 +558,10 @@ class CameraService:
             "balance": balance,
             "left_motion": left_motion,
             "right_motion": right_motion,
+            "hand_valid": hand_valid,
+            "hand_x_norm": hand_x_norm,
+            "hand_y_norm": hand_y_norm,
+            "raised_region": raised_region,
             "bbox": det.bbox,
             "confidence": det.confidence,
         }

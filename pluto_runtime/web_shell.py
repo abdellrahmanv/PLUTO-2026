@@ -1302,7 +1302,7 @@ def html_page() -> str:
       document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected`;
       document.getElementById('waveEvent').textContent = waveEvent
         ? `${{waveEvent.reason}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
-        : `${{waveDetector.reason || 'none'}} / samples ${{waveDetector.sample_count || 0}}`;
+        : `${{waveDetector.reason || 'none'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
       const manual = data.manual || {{}};
       document.getElementById('manualEnabled').textContent = manual.enabled ? 'true' : 'false';
       document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;

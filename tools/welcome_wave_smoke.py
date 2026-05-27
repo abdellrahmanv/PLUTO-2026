@@ -119,7 +119,7 @@ def run_detector_checks() -> None:
             },
             now=float(index) * 0.2,
         )
-        if status.confirmed:
+        if status.confirmed and status.reason == "confirmed_wave":
             confirmed_status = status
     assert confirmed_status is not None, status
     assert confirmed_status.reason == "confirmed_wave", confirmed_status
@@ -137,11 +137,39 @@ def run_detector_checks() -> None:
             },
             now=float(index) * 0.2,
         )
-        if status.confirmed:
+        if status.confirmed and status.reason == "confirmed_wave":
             confirmed_status = status
     assert confirmed_status is not None, status
     assert confirmed_status.reason == "confirmed_wave", confirmed_status
     assert confirmed_status.motion_direction_changes >= 2, confirmed_status
+
+    detector = SimpleWaveDetector(cooldown_s=0.5)
+    hand_positions = [-0.45, 0.30, -0.38, 0.34, -0.42, 0.36, -0.40]
+    confirmed_status = None
+    for index, hand_x in enumerate(hand_positions):
+        status = detector.update(
+            {
+                **base,
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87}],
+                "wave_motion": {
+                    "motion_norm": 0.030,
+                    "balance": 0.5 if hand_x > 0 else -0.5,
+                    "hand_valid": True,
+                    "hand_x_norm": hand_x,
+                    "hand_y_norm": 0.35,
+                    "raised_region": True,
+                },
+            },
+            now=float(index) * 0.2,
+        )
+        if status.confirmed and status.reason == "confirmed_wave":
+            confirmed_status = status
+    assert confirmed_status is not None, status
+    assert confirmed_status.algorithm == "pc_rule_lite", confirmed_status
+    assert confirmed_status.raised is True, confirmed_status
+    assert confirmed_status.hand_amp >= 0.16, confirmed_status
+    assert confirmed_status.hand_sign_changes >= 2, confirmed_status
+    assert confirmed_status.hand_dx_dy >= 1.2, confirmed_status
 
 
 def main() -> int:

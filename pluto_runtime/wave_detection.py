@@ -1,8 +1,13 @@
-"""Lightweight WELCOME wave detection using existing human boxes.
+"""Pi-friendly WELCOME wave detection using the PC prototype's rules.
 
-This is intentionally simpler than the research prototype. It does not load
-pose models or PyTorch. It watches the existing TFLite human box stream for a
-short burst of lateral/width motion and produces a WELCOME trigger candidate.
+The desktop prototype used YOLOv5 + SORT + MediaPipe pose. Pluto keeps the
+parts that made it reliable but avoids the heavy stack on the Raspberry Pi:
+
+1. Reuse the existing TFLite human boxes from the camera service.
+2. Extract a cheap hand-motion candidate from the upper human crop.
+3. Apply the same gates as the PC detector: raised region, horizontal
+   amplitude, x direction changes, horizontal-dominates-vertical, confirmation
+   streak, and cooldown.
 """
 
 from __future__ import annotations
@@ -21,6 +26,10 @@ class WaveSample:
     confidence: float
     motion_norm: float = 0.0
     motion_balance: float = 0.0
+    hand_valid: bool = False
+    hand_x_norm: float = 0.0
+    hand_y_norm: float = 1.0
+    raised_region: bool = False
 
 
 @dataclass
@@ -37,6 +46,13 @@ class WaveStatus:
     width_change_norm: float = 0.0
     motion_norm: float = 0.0
     motion_direction_changes: int = 0
+    hand_amp: float = 0.0
+    hand_sign_changes: int = 0
+    hand_dx_dy: float = 0.0
+    raised: bool = False
+    frame_pass: bool = False
+    confirm_streak: int = 0
+    algorithm: str = "pc_rule_lite"
     target_id: str | None = None
     cooldown_remaining_s: float = 0.0
     last_confirmed_at: float | None = None
@@ -46,17 +62,20 @@ class WaveStatus:
 
 
 class SimpleWaveDetector:
-    """Detect a deliberate wave-like motion from person bounding boxes."""
+    """Detect deliberate waving with the PC prototype gates, minus pose model."""
 
     def __init__(
         self,
-        window_s: float = 2.4,
-        min_samples: int = 6,
+        window_s: float = 1.8,
+        min_samples: int = 5,
         min_direction_changes: int = 2,
         min_amplitude_norm: float = 0.045,
         min_width_change_norm: float = 0.065,
-        min_motion_norm: float = 0.012,
+        min_motion_norm: float = 0.010,
         min_motion_direction_changes: int = 2,
+        hand_amp_thresh: float = 0.16,
+        hand_dxdy_ratio: float = 1.20,
+        confirm_k: int = 2,
         min_confidence: float = 0.30,
         cooldown_s: float = 4.0,
     ) -> None:
@@ -67,9 +86,13 @@ class SimpleWaveDetector:
         self.min_width_change_norm = min_width_change_norm
         self.min_motion_norm = min_motion_norm
         self.min_motion_direction_changes = min_motion_direction_changes
+        self.hand_amp_thresh = hand_amp_thresh
+        self.hand_dxdy_ratio = hand_dxdy_ratio
+        self.confirm_k = confirm_k
         self.min_confidence = min_confidence
         self.cooldown_s = cooldown_s
         self.samples: deque[WaveSample] = deque(maxlen=48)
+        self.confirm_streak = 0
         self.last_confirmed_at: float | None = None
         self.status = WaveStatus()
 
@@ -82,6 +105,7 @@ class SimpleWaveDetector:
         target = self._select_target(detections)
         if target is None:
             self.samples.clear()
+            self.confirm_streak = 0
             self.status = WaveStatus(
                 available=bool(camera_status.get("available", False)),
                 confirmed=False,
@@ -95,6 +119,7 @@ class SimpleWaveDetector:
         x1, _y1, x2, _y2 = [float(value) for value in bbox]
         confidence = float(target.get("confidence") or 0.0)
         motion = camera_status.get("wave_motion") or {}
+        hand_y = motion.get("hand_y_norm")
         sample = WaveSample(
             timestamp=now,
             center_x=(x1 + x2) / 2.0,
@@ -102,6 +127,10 @@ class SimpleWaveDetector:
             confidence=confidence,
             motion_norm=float(motion.get("motion_norm") or 0.0),
             motion_balance=float(motion.get("balance") or 0.0),
+            hand_valid=bool(motion.get("hand_valid", False)),
+            hand_x_norm=float(motion.get("hand_x_norm") or 0.0),
+            hand_y_norm=float(hand_y if hand_y is not None else 1.0),
+            raised_region=bool(motion.get("raised_region", False)),
         )
         self.samples.append(sample)
         self._trim(now)
@@ -126,7 +155,7 @@ class SimpleWaveDetector:
     def _evaluate(self, frame_width: float, now: float) -> WaveStatus:
         cooldown = self._cooldown_remaining(now)
         if cooldown > 0:
-            return self._status(False, "cooldown_active", frame_width, now, cooldown)
+            return self._status(True, "cooldown_active", frame_width, now, cooldown, score=1.0)
 
         if len(self.samples) < self.min_samples:
             return self._status(False, "not_enough_samples", frame_width, now, cooldown)
@@ -135,63 +164,139 @@ class SimpleWaveDetector:
         if confidence < self.min_confidence:
             return self._status(False, "low_confidence", frame_width, now, cooldown)
 
-        direction_changes = count_direction_changes([item.center_x for item in self.samples])
-        motion_direction_changes = count_direction_changes([item.motion_balance for item in self.samples], deadband=0.18)
-        amplitude_norm = (max(item.center_x for item in self.samples) - min(item.center_x for item in self.samples)) / frame_width
-        width_change_norm = (max(item.width for item in self.samples) - min(item.width for item in self.samples)) / frame_width
-        motion_norm = sum(item.motion_norm for item in self.samples) / max(len(self.samples), 1)
-        box_wave = direction_changes >= self.min_direction_changes and (
-            amplitude_norm >= self.min_amplitude_norm or width_change_norm >= self.min_width_change_norm
+        metrics = self._metrics(frame_width)
+        hand_gate = (
+            metrics["raised"]
+            and metrics["hand_amp"] >= self.hand_amp_thresh
+            and metrics["hand_sign_changes"] >= self.min_direction_changes
+            and metrics["hand_dx_dy"] >= self.hand_dxdy_ratio
+            and metrics["motion_norm"] >= self.min_motion_norm
         )
-        pixel_wave = motion_direction_changes >= self.min_motion_direction_changes and motion_norm >= self.min_motion_norm
-        if not box_wave and not pixel_wave:
-            if motion_norm < self.min_motion_norm and amplitude_norm < self.min_amplitude_norm and width_change_norm < self.min_width_change_norm:
+        if hand_gate:
+            self.confirm_streak += 2
+        else:
+            self.confirm_streak = max(0, self.confirm_streak - 1)
+
+        pc_rule_wave = self.confirm_streak >= self.confirm_k
+        box_wave = metrics["direction_changes"] >= self.min_direction_changes and (
+            metrics["amplitude_norm"] >= self.min_amplitude_norm or metrics["width_change_norm"] >= self.min_width_change_norm
+        )
+        pixel_wave = (
+            metrics["motion_direction_changes"] >= self.min_motion_direction_changes
+            and metrics["motion_norm"] >= self.min_motion_norm
+        )
+
+        if not pc_rule_wave and not box_wave and not pixel_wave:
+            if (
+                metrics["motion_norm"] < self.min_motion_norm
+                and metrics["amplitude_norm"] < self.min_amplitude_norm
+                and metrics["width_change_norm"] < self.min_width_change_norm
+            ):
                 return self._status(False, "amplitude_too_low", frame_width, now, cooldown)
             return self._status(False, "not_enough_direction_changes", frame_width, now, cooldown)
 
         score = min(
             1.0,
             max(
-                amplitude_norm / self.min_amplitude_norm,
-                width_change_norm / self.min_width_change_norm,
-                motion_norm / self.min_motion_norm,
+                metrics["hand_amp"] / self.hand_amp_thresh,
+                metrics["motion_norm"] / self.min_motion_norm,
+                self.confirm_streak / self.confirm_k,
+                metrics["amplitude_norm"] / self.min_amplitude_norm,
+                metrics["width_change_norm"] / self.min_width_change_norm,
             )
             / 2.0,
         )
-        return self._status(True, "confirmed_wave", frame_width, now, cooldown, score=score)
+        return self._status(True, "confirmed_wave", frame_width, now, cooldown, score=score, frame_pass=hand_gate)
 
-    def _status(self, confirmed: bool, reason: str, frame_width: float, now: float, cooldown: float, score: float = 0.0) -> WaveStatus:
-        samples = list(self.samples)
-        direction_changes = count_direction_changes([item.center_x for item in samples])
-        amplitude_norm = 0.0
-        width_change_norm = 0.0
-        motion_norm = 0.0
-        motion_direction_changes = count_direction_changes([item.motion_balance for item in samples], deadband=0.18)
-        confidence = 0.0
-        side = "unknown"
-        if samples:
-            amplitude_norm = (max(item.center_x for item in samples) - min(item.center_x for item in samples)) / frame_width
-            width_change_norm = (max(item.width for item in samples) - min(item.width for item in samples)) / frame_width
-            motion_norm = sum(item.motion_norm for item in samples) / max(len(samples), 1)
-            confidence = sum(item.confidence for item in samples) / max(len(samples), 1)
-            side = "right" if samples[-1].center_x >= samples[0].center_x else "left"
+    def _status(
+        self,
+        confirmed: bool,
+        reason: str,
+        frame_width: float,
+        now: float,
+        cooldown: float,
+        score: float = 0.0,
+        frame_pass: bool = False,
+    ) -> WaveStatus:
+        metrics = self._metrics(frame_width)
         return WaveStatus(
             available=True,
             confirmed=confirmed,
             reason=reason,
             score=score,
-            confidence=confidence,
-            side=side,
-            sample_count=len(samples),
-            direction_changes=direction_changes,
-            amplitude_norm=amplitude_norm,
-            width_change_norm=width_change_norm,
-            motion_norm=motion_norm,
-            motion_direction_changes=motion_direction_changes,
-            target_id="human_0" if samples else None,
+            confidence=metrics["confidence"],
+            side=metrics["side"],
+            sample_count=len(self.samples),
+            direction_changes=metrics["direction_changes"],
+            amplitude_norm=metrics["amplitude_norm"],
+            width_change_norm=metrics["width_change_norm"],
+            motion_norm=metrics["motion_norm"],
+            motion_direction_changes=metrics["motion_direction_changes"],
+            hand_amp=metrics["hand_amp"],
+            hand_sign_changes=metrics["hand_sign_changes"],
+            hand_dx_dy=metrics["hand_dx_dy"],
+            raised=metrics["raised"],
+            frame_pass=frame_pass,
+            confirm_streak=self.confirm_streak,
+            target_id="human_0" if self.samples else None,
             cooldown_remaining_s=cooldown,
             last_confirmed_at=self.last_confirmed_at,
         )
+
+    def _metrics(self, frame_width: float) -> dict[str, Any]:
+        samples = list(self.samples)
+        if not samples:
+            return {
+                "direction_changes": 0,
+                "amplitude_norm": 0.0,
+                "width_change_norm": 0.0,
+                "motion_norm": 0.0,
+                "motion_direction_changes": 0,
+                "hand_amp": 0.0,
+                "hand_sign_changes": 0,
+                "hand_dx_dy": 0.0,
+                "raised": False,
+                "confidence": 0.0,
+                "side": "unknown",
+            }
+
+        direction_changes = count_direction_changes([item.center_x for item in samples])
+        amplitude_norm = (max(item.center_x for item in samples) - min(item.center_x for item in samples)) / frame_width
+        width_change_norm = (max(item.width for item in samples) - min(item.width for item in samples)) / frame_width
+        motion_norm = sum(item.motion_norm for item in samples) / len(samples)
+        motion_direction_changes = count_direction_changes([item.motion_balance for item in samples], deadband=0.18)
+        confidence = sum(item.confidence for item in samples) / len(samples)
+        side = "right" if samples[-1].center_x >= samples[0].center_x else "left"
+
+        hand_amp = 0.0
+        hand_sign_changes = 0
+        hand_dx_dy = 0.0
+        raised = False
+        hand_samples = [item for item in samples if item.hand_valid]
+        if hand_samples:
+            xs = [item.hand_x_norm for item in hand_samples]
+            ys = [item.hand_y_norm for item in hand_samples]
+            hand_amp = max(xs) - min(xs)
+            hand_sign_changes = count_direction_changes(xs, deadband=0.03)
+            dx = sum(abs(right - left) for left, right in zip(xs, xs[1:]))
+            dy = sum(abs(right - left) for left, right in zip(ys, ys[1:]))
+            hand_dx_dy = dx / (dy + 1e-6)
+            raised = sum(1 for item in hand_samples if item.raised_region) / len(hand_samples) >= 0.55
+            side = "right" if hand_samples[-1].hand_x_norm >= 0 else "left"
+
+        return {
+            "direction_changes": direction_changes,
+            "amplitude_norm": amplitude_norm,
+            "width_change_norm": width_change_norm,
+            "motion_norm": motion_norm,
+            "motion_direction_changes": motion_direction_changes,
+            "hand_amp": hand_amp,
+            "hand_sign_changes": hand_sign_changes,
+            "hand_dx_dy": hand_dx_dy,
+            "raised": raised,
+            "confidence": confidence,
+            "side": side,
+        }
 
     def _cooldown_remaining(self, now: float) -> float:
         if self.last_confirmed_at is None:
