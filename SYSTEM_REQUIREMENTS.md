@@ -76,6 +76,8 @@ Every requirement should have:
 | SAFE-006 | Motors shall first be tested with wheels lifted off the ground. | Human/test process | Test record |
 | SAFE-007 | STM32 shall command zero wheel speed when hoverboard battery is below critical voltage. | STM32 | Low-voltage test |
 | SAFE-008 | Pi shall mark low battery as a safety warning before critical cutoff. | Pi | Battery threshold test |
+| SAFE-009 | Pi shall use camera-based human/obstacle perception as a secondary safety layer in WELCOME and DANCE when vision is available. | Pi | Vision safety test |
+| SAFE-010 | Vision safety shall not replace STM32 obstacle stop logic; it shall only reduce or stop Pi motion commands earlier. | Pi + STM32 | Architecture/safety review |
 
 ## Timing Requirements
 
@@ -237,6 +239,7 @@ robot noise, motor vibration, speaker feedback, and room noise.
 | AUD-021 | WELCOME_TALK v1.5 shall keep keyword/intent matching as the first response path even if Ollama is enabled. | Pi | Response source log |
 | AUD-022 | Pi shall prefer the webcam/camera microphone when it is detected as an ALSA capture device. | Pi | Audio probe |
 | AUD-023 | Website shall expose audio status, selected microphone, selected speaker, and STT/TTS backend. | Pi | UI/API test |
+| AUD-024 | Website and tools shall allow selecting a preferred microphone device for headset-microphone testing. | Pi | Headset mic test |
 
 ## Stepper Arm Requirements
 
@@ -717,6 +720,7 @@ WELCOME_DONE
 | STATE-3.12.4 | Wave detection shall use a confirmation window and cooldown to prevent rapid repeat triggers. | Pi | Trigger debounce test |
 | STATE-3.12.5 | Wave detection shall expose debug evidence: target ID, side, score, confidence, and confirmation reason. | Pi | Debug log review |
 | STATE-3.12.6 | If pose or wave dependencies are unavailable, WELCOME shall fall back to operator/web trigger. | Pi | Missing dependency test |
+| STATE-3.12.7 | Wave detection shall be implemented inside `WELCOME_DETECT`, not as a separate robot mode. | Pi | Mode/substate log |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |
@@ -753,6 +757,9 @@ WELCOME_DONE
 | STATE-3.29 | If the selected person moves closer than greeting distance, Pi shall stop and transition to WELCOME_ARRIVED. | Pi | Moving target test |
 | STATE-3.29.1 | If target tracking is uncertain, Pi shall command `CMD:STOP` before recalculating approach. | Pi + STM32 | Target uncertainty test |
 | STATE-3.29.2 | WELCOME_APPROACH shall not command reverse motion unless explicitly required by avoidance or abort behavior. | Pi | Command log |
+| STATE-3.29.3 | WELCOME_APPROACH shall use optimized vision perception when available to slow or stop before reaching humans or obstacles. | Pi | Vision safety test |
+| STATE-3.29.4 | WELCOME vision safety should use threaded capture, low resolution, frame skipping, detection hold, and tracked boxes to keep latency bounded. | Pi | CPU/FPS log |
+| STATE-3.29.5 | If vision and ultrasonic obstacle estimates disagree, Pi shall choose the safer slower command until confidence recovers. | Pi + STM32 | Sensor disagreement test |
 
 ### Arrival And Talk Requirements
 
@@ -782,6 +789,7 @@ WELCOME_DONE
 | STATE-3.33.8 | WELCOME_TALK v1.5 shall have a benchmark gate before it can be enabled on the robot. | Project + Pi | Benchmark review |
 | STATE-3.33.9 | WELCOME_TALK v1 shall include a broad keyword bank before any LLM fallback is enabled. | Pi | Response bank test |
 | STATE-3.33.10 | Website WELCOME_TALK shall support text ask, ask-and-speak, and camera-mic listen controls. | Pi | UI/API test |
+| STATE-3.33.11 | WELCOME_TALK v1 shall answer configured demo identity facts exactly, including location, builders, and simple weather. | Pi | Response bank test |
 
 ### WELCOME_TALK Version Roadmap
 
@@ -860,6 +868,7 @@ WELCOME_DONE
 | VER-WELCOME-012 | WELCOME in multi-person scene. | crowd size, selected target, target lock logged |
 | VER-WELCOME-013 | WELCOME_TALK with motor noise. | low confidence/fallback or motion pause logged |
 | VER-WELCOME-014 | WELCOME arm gesture. | bounded `CMD:ARM`, no wheel movement during talk |
+| VER-WELCOME-015 | Human or obstacle appears in approach path with vision enabled. | Pi slows/stops before command crosses safety margin |
 
 ## STATE-4: DANCE
 
@@ -903,6 +912,9 @@ while never sacrificing obstacle safety.
 | STATE-4.23 | DANCE shall stop if audio system fails. | Pi | Audio fault test |
 | STATE-4.24 | DANCE shall stop if STM32 reports any critical alert. | Pi | Alert test |
 | STATE-4.25 | DANCE shall stop arm motion before or at the same time as wheel stop on critical fault. | Pi + STM32 | Fault test |
+| STATE-4.26 | DANCE shall use optimized vision perception when available to detect humans or obstacles entering the dance envelope. | Pi | Vision safety test |
+| STATE-4.27 | DANCE vision safety should use threaded capture, low resolution, frame skipping, detection hold, and tracked boxes to keep latency bounded. | Pi | CPU/FPS log |
+| STATE-4.28 | If vision detects a human or obstacle near the dance envelope, Pi shall shrink, pause, or stop dance motion. | Pi + STM32 | Dance obstacle test |
 
 ### Exit Requirements
 
@@ -924,6 +936,7 @@ while never sacrificing obstacle safety.
 | VER-DANCE-005 | Unplug STM32 during dance. | ERROR state |
 | VER-DANCE-006 | Run DANCE with arm enabled. | bounded arm commands, stop on fault |
 | VER-DANCE-007 | Run DANCE with speaker missing. | DANCE blocked or explicit silent mode |
+| VER-DANCE-008 | Human or obstacle enters dance envelope with vision enabled. | motion shrinks, pauses, or stops |
 
 ## STATE-5: ERROR
 

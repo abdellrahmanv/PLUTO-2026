@@ -1,6 +1,6 @@
 # Feature Memory: WELCOME Wave Trigger Detection
 
-Status: design studied, deferred from Phase 4, planned for WELCOME implementation
+Status: design studied, merged into Phase 9 WELCOME design, implementation pending
 
 Last updated: 2026-05-27
 
@@ -47,6 +47,11 @@ WELCOME-WAVE-004 missing dependency fallback test
 
 Detect a deliberate human wave and convert it into a safe WELCOME trigger.
 
+This is not a standalone Pluto mode. A wave is an input event inside
+`WELCOME_DETECT`. If the event is confirmed and the mode manager safety gates
+allow it, the robot transitions into WELCOME and continues through target
+selection, approach, talk, and return.
+
 This feature must not move Pluto by itself. It only produces a confirmed
 intent event for the mode manager. The mode manager then decides whether
 WELCOME is allowed based on safety gates, STM32 availability, battery state,
@@ -88,6 +93,14 @@ Phase 4 is closed as camera feed plus human presence. Wave detection belongs
 to WELCOME because it can trigger a state transition that later enables
 approach motion. That means it needs its own requirements, safety gate,
 debug evidence, and verification tests.
+
+Wave detection is also not a separate `FOLLOW_WAVE` mode in v1. The old
+follow-wave idea is merged into WELCOME so the visitor experience is one clean
+loop:
+
+```text
+wave -> WELCOME_DETECT -> WELCOME_APPROACH -> WELCOME_TALK -> WELCOME_RETURN
+```
 
 ## Current Prototype Algorithm
 
@@ -179,6 +192,7 @@ Inputs:
 Outputs:
 
 - Confirmed WELCOME trigger candidate.
+- WELCOME_DETECT substate debug details.
 - Debug status for website and logs.
 - No motor commands.
 
@@ -187,6 +201,7 @@ Website impact:
 - Show wave detector state when enabled.
 - Show selected target ID and confidence.
 - Show unavailable reason if pose dependencies are missing.
+- Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
 
@@ -246,3 +261,4 @@ WELCOME.
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-05-27 | Created feature memory from local wave detection study | Preserve design and defer implementation to WELCOME feature gate |
+| 2026-05-27 | Merged follow-wave into WELCOME | Keep wave as WELCOME_DETECT trigger, not a separate robot mode |

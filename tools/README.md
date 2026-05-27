@@ -116,11 +116,26 @@ the camera microphone and record one second:
 /home/pi/yolo/env/bin/python tools/audio_io_smoke.py --require-microphone --record-probe
 ```
 
+To test a headphone/headset microphone, plug it in, refresh audio, then run:
+
+```bash
+/home/pi/yolo/env/bin/python tools/audio_io_smoke.py --require-microphone --record-probe --microphone-device headset
+```
+
+If ALSA shows a specific id, use it directly:
+
+```bash
+arecord -l
+/home/pi/yolo/env/bin/python tools/audio_io_smoke.py --require-microphone --record-probe --microphone-device plughw:CARD=camera,DEV=0
+```
+
 Useful endpoints:
 
 ```text
 /api/audio/status
 /api/audio/refresh
+/api/audio/select-microphone
+/api/audio/select-speaker
 /api/audio/speak
 /api/welcome/talk
 /api/welcome/listen

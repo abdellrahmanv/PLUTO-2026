@@ -430,10 +430,11 @@ Pluto approaches a confirmed person, greets, talks simply, and returns safely.
 Features:
 
 - confirmed trigger
-- wave trigger detection
+- wave trigger detection inside `WELCOME_DETECT`
 - target selection
 - approach
 - obstacle handling
+- optimized vision-assisted obstacle safety
 - arrival distance
 - simple talk fallback
 - 9-word talk input/output limits
@@ -441,6 +442,7 @@ Features:
 - large deterministic keyword bank
 - fully offline v1 talk path
 - camera microphone detection
+- headset microphone override/testing
 - local speech-to-text detection
 - local Piper text-to-speech output
 - website Listen and Ask+Speak controls
@@ -453,14 +455,16 @@ Validation:
 
 ```text
 Trigger WELCOME      -> target selected
-Wave trigger         -> confirmed intent event, no direct motion
+Wave trigger         -> WELCOME_DETECT confirmed intent, no separate mode
 Approach             -> bounded motion
-Obstacle             -> stop/request space
+Obstacle             -> ultrasonic primary stop, vision reduces/stops early
 Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
 Talk answer          -> keyword-first, max 9 words
+Talk facts           -> MSA University, Abdelrahman/Hamza, slightly hot
 Talk v1              -> offline, no API keys, no cloud calls
 Camera mic           -> detected as selected microphone
+Headset mic          -> selected by website/API/tool override
 Audio smoke          -> record probe succeeds
 Ask+Speak            -> response shown and TTS command starts
 Talk v1.5            -> Ollama fallback only after benchmark
@@ -487,6 +491,12 @@ feature_memory/STATE-3.33_welcome_talk_v1.md
 feature_memory/AUD-001_audio_io_v1.md
 tools/welcome_talk_smoke.py
 tools/audio_io_smoke.py
+```
+
+WELCOME vision-assisted obstacle safety memory:
+
+```text
+feature_memory/SAFE-009_vision_assisted_obstacle_safety.md
 ```
 
 WELCOME_TALK build split:
@@ -517,13 +527,14 @@ Features:
 - fixed direction in v1
 - optional bounded arm movement
 - obstacle stop/reduce behavior
+- optimized vision-assisted obstacle safety
 - stop on song end or operator stop
 
 Validation:
 
 ```text
 Start DANCE      -> audio and bounded commands
-Obstacle         -> motion reduces/stops
+Obstacle         -> ultrasonic stop plus vision-assisted shrink/stop
 Stop selected    -> audio stops, CMD:STOP
 Speaker missing  -> blocked or explicit silent mode
 STM32 alert      -> ERROR

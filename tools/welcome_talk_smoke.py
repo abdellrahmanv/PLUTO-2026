@@ -75,6 +75,24 @@ def run_engine_checks() -> None:
     assert name.response_source == "keyword"
     assert_word_limited(name.response)
 
+    location = engine.answer("where are you")
+    assert location.accepted is True
+    assert location.intent == "place"
+    assert location.response == "MSA University in Egypt."
+    assert_word_limited(location.response)
+
+    creator = engine.answer("who made pluto")
+    assert creator.accepted is True
+    assert creator.intent == "creator"
+    assert creator.response == "Abdelrahman and Hamza built me."
+    assert_word_limited(creator.response)
+
+    weather = engine.answer("weather")
+    assert weather.accepted is True
+    assert weather.intent == "weather"
+    assert weather.response == "It is slightly hot today."
+    assert_word_limited(weather.response)
+
     fuzzy = engine.answer("who ar you")
     assert fuzzy.accepted is True
     assert fuzzy.intent == "name"
@@ -108,7 +126,7 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
     assert status["talk"]["max_input_words"] == 9
     assert status["talk"]["max_output_words"] == 9
     assert status["talk"]["ollama_fallback_enabled"] is False
-    assert status["talk"]["intent_count"] >= 60
+    assert status["talk"]["intent_count"] >= 90
     assert "audio" in status
 
     blocked_code, blocked_raw = request(base, "/api/welcome/talk", "POST", {"text": "what is your name"})

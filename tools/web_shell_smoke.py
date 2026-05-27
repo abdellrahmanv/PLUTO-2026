@@ -83,6 +83,13 @@ def main() -> int:
         audio = json.loads(raw_audio.decode("utf-8"))
         assert "microphone_available" in audio
         assert "speaker_available" in audio
+        assert "requested_microphone" in audio
+        assert "requested_speaker" in audio
+
+        select_mic_code, select_mic_raw = request("/api/audio/select-microphone", "POST", {"device": ""})
+        assert select_mic_code == 200, select_mic_code
+        selected_mic = json.loads(select_mic_raw.decode("utf-8"))
+        assert "requested_microphone" in selected_mic
 
         jpg_code, _ = request("/camera.jpg")
         assert jpg_code in {200, 503}, jpg_code

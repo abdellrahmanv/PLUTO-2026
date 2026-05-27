@@ -27,6 +27,7 @@ STATE-3.33.3
 STATE-3.33.4
 STATE-3.33.5
 STATE-3.33.6
+STATE-3.33.11
 STATE-3.35
 STATE-3.37
 ```
@@ -110,6 +111,27 @@ POST /api/welcome/talk
   -> log response source and latency
 ```
 
+Current bank coverage:
+
+```text
+identity: name, project, builders, version
+location/demo: MSA University in Egypt, graduation demo, weather
+system: modes, website, STM32, Raspberry Pi, hoverboard, Uno
+safety: stop, obstacle, distance, human safety, camera avoidance
+interaction: greeting, goodbye, thanks, welcome wave, approach
+personality: feeling, alive, happy, jokes, favorites, dreams
+debug: tests, requirements, logs, confidence, noise
+audio: microphone, headset/webcam mic, speaker, local/offline speech
+```
+
+Exact demo facts locked by smoke tests:
+
+```text
+"where are you" -> "MSA University in Egypt."
+"who made pluto" -> "Abdelrahman and Hamza built me."
+"weather" -> "It is slightly hot today."
+```
+
 ## How To Run
 
 Local smoke:
@@ -151,6 +173,16 @@ python tools/welcome_talk_smoke.py
 curl http://127.0.0.1:8080/api/status
 ```
 
+Bank audit:
+
+```bash
+python - <<'PY'
+from pluto_runtime.welcome_talk import INTENT_RULES
+for rule in INTENT_RULES:
+    print(rule.intent, "=>", rule.response)
+PY
+```
+
 ## Expected Evidence
 
 Known keyword:
@@ -178,6 +210,7 @@ response="Short question please."
 | VER-TALK-002 | 10-word question | blocked with short-question response | local pass |
 | VER-TALK-003 | Response bank audit | all responses <= 9 words | local pass |
 | VER-TALK-005 | No internet/API keys | engine imports no cloud dependency | local pass |
+| VER-TALK-006 | Demo fact prompts | location/builders/weather exact answers | local pass |
 
 ## Failure Modes
 
@@ -197,8 +230,7 @@ when STM32 is alive and speed telemetry is zero.
 
 ## Open Questions
 
-- Which microphone/STT path will feed this engine first?
-- Which answers should be expanded for the actual demo location?
+- Which answers should be promoted into pre-rendered Piper audio?
 - Should common TTS lines be cached as audio files in the next phase?
 
 ## Change History
@@ -206,3 +238,4 @@ when STM32 is alive and speed telemetry is zero.
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-05-27 | Initial implementation memory | WELCOME_TALK v1 answer engine added |
+| 2026-05-27 | Expanded demo bank | Add MSA University, builders, weather, safety, and interaction facts |

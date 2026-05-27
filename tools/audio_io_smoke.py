@@ -32,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-speaker", action="store_true", help="Fail if no speaker is detected.")
     parser.add_argument("--record-probe", action="store_true", help="Record one second from selected microphone.")
     parser.add_argument("--tts-probe", action="store_true", help="Ask the web server to speak a short line.")
+    parser.add_argument("--microphone-device", help="Prefer this ALSA microphone id/name, for example plughw:CARD=Headset,DEV=0.")
+    parser.add_argument("--speaker-device", help="Prefer this ALSA playback id/name.")
     return parser.parse_args()
 
 
@@ -79,7 +81,7 @@ def validate_status(status: dict, require_microphone: bool, require_speaker: boo
 
 
 def run_local_checks(args: argparse.Namespace) -> None:
-    audio = AudioRuntime()
+    audio = AudioRuntime(preferred_microphone=args.microphone_device, preferred_speaker=args.speaker_device)
     status = audio.status()
     validate_status(status, args.require_microphone, args.require_speaker)
     if args.record_probe:
@@ -100,6 +102,13 @@ def run_web_checks(base: str, args: argparse.Namespace) -> None:
     assert refresh_code == 200, refresh_code
     refreshed = json.loads(raw_refresh.decode("utf-8"))
     validate_status(refreshed, args.require_microphone, args.require_speaker)
+
+    if args.microphone_device:
+        select_code, raw_select = request(base, "/api/audio/select-microphone", "POST", {"device": args.microphone_device})
+        assert select_code == 200, select_code
+        selected = json.loads(raw_select.decode("utf-8"))
+        validate_status(selected, args.require_microphone, args.require_speaker)
+        assert args.microphone_device.lower() in json.dumps(selected).lower(), selected
 
     if args.tts_probe:
         speak_code, raw_speak = request(base, "/api/audio/speak", "POST", {"text": "I am Pluto."})

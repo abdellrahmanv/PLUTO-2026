@@ -46,6 +46,8 @@ class AudioProbe:
     speaker_available: bool = False
     selected_microphone: str | None = None
     selected_speaker: str | None = None
+    requested_microphone: str | None = None
+    requested_speaker: str | None = None
     capture_devices: list[AudioDevice] = field(default_factory=list)
     playback_devices: list[AudioDevice] = field(default_factory=list)
     tools: dict[str, bool] = field(default_factory=dict)
@@ -71,10 +73,14 @@ class AudioRuntime:
         channels: int = 1,
         cache_dir: str | None = None,
         min_rms: float = 0.03,
+        preferred_microphone: str | None = None,
+        preferred_speaker: str | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
         self.min_rms = min_rms
+        self.preferred_microphone = preferred_microphone or os.environ.get("PLUTO_MIC_DEVICE")
+        self.preferred_speaker = preferred_speaker or os.environ.get("PLUTO_SPEAKER_DEVICE")
         self.cache_dir = Path(cache_dir or Path(tempfile.gettempdir()) / "pluto_tts_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
@@ -89,8 +95,8 @@ class AudioRuntime:
 
         capture = parse_alsa_devices(run_text(["arecord", "-l"]) if tools["arecord"] else "", "capture")
         playback = parse_alsa_devices(run_text(["aplay", "-l"]) if tools["aplay"] else "", "playback")
-        selected_mic = select_capture_device(capture)
-        selected_speaker = select_playback_device(playback)
+        selected_mic = select_capture_device(capture, self.preferred_microphone)
+        selected_speaker = select_playback_device(playback, self.preferred_speaker)
 
         packages = {
             "faster_whisper": package_available("faster_whisper"),
@@ -104,6 +110,8 @@ class AudioRuntime:
             speaker_available=bool(selected_speaker and tools["aplay"]),
             selected_microphone=selected_mic.id if selected_mic else None,
             selected_speaker=selected_speaker.id if selected_speaker else None,
+            requested_microphone=self.preferred_microphone,
+            requested_speaker=self.preferred_speaker,
             capture_devices=capture,
             playback_devices=playback,
             tools=tools,
@@ -124,6 +132,16 @@ class AudioRuntime:
     def status(self) -> dict[str, Any]:
         with self.lock:
             return self.probe_status.to_dict()
+
+    def set_microphone(self, device: str | None) -> dict[str, Any]:
+        clean = str(device or "").strip() or None
+        self.preferred_microphone = clean
+        return self.probe().to_dict()
+
+    def set_speaker(self, device: str | None) -> dict[str, Any]:
+        clean = str(device or "").strip() or None
+        self.preferred_speaker = clean
+        return self.probe().to_dict()
 
     def record(self, duration_s: float = 3.0) -> dict[str, Any]:
         status = self.probe_status
@@ -358,18 +376,37 @@ def parse_alsa_devices(output: str, kind: str) -> list[AudioDevice]:
 def is_preferred_audio(name: str, kind: str) -> bool:
     text = name.lower()
     if kind == "capture":
-        return any(token in text for token in ("camera", "webcam", "usb", "mic", "microphone"))
+        return any(token in text for token in ("headset", "headphone", "camera", "webcam", "usb", "mic", "microphone"))
     return any(token in text for token in ("headphone", "speaker", "usb", "audio"))
 
 
-def select_capture_device(devices: list[AudioDevice]) -> AudioDevice | None:
+def device_matches(device: AudioDevice, preferred: str | None) -> bool:
+    if not preferred:
+        return False
+    needle = preferred.lower()
+    return needle in device.id.lower() or needle in device.name.lower() or needle in device.detail.lower()
+
+
+def select_capture_device(devices: list[AudioDevice], preferred: str | None = None) -> AudioDevice | None:
+    for device in devices:
+        if device_matches(device, preferred):
+            device.preferred = True
+            return device
+    for device in devices:
+        if any(token in device.name.lower() for token in ("headset", "headphone")):
+            device.preferred = True
+            return device
     for device in devices:
         if device.preferred:
             return device
     return devices[0] if devices else None
 
 
-def select_playback_device(devices: list[AudioDevice]) -> AudioDevice | None:
+def select_playback_device(devices: list[AudioDevice], preferred: str | None = None) -> AudioDevice | None:
+    for device in devices:
+        if device_matches(device, preferred):
+            device.preferred = True
+            return device
     for device in devices:
         if "headphone" in device.name.lower():
             device.preferred = True

@@ -104,6 +104,8 @@ class PlutoWebContext:
         camera_detection_hold: float = 2.0,
         camera_confidence: float = 0.30,
         yolo_model: str | None = None,
+        microphone_device: str | None = None,
+        speaker_device: str | None = None,
     ) -> None:
         self.serial_baud = serial_baud
         self.lock = threading.RLock()
@@ -116,7 +118,7 @@ class PlutoWebContext:
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
         self.talk_last_notice = "Enter WELCOME, then ask a short question."
-        self.audio_runtime = AudioRuntime()
+        self.audio_runtime = AudioRuntime(preferred_microphone=microphone_device, preferred_speaker=speaker_device)
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
@@ -426,6 +428,18 @@ class PlutoWebContext:
             )
             self.log("info", "Audio hardware refreshed")
         return status.to_dict()
+
+    def select_microphone(self, device: str | None) -> dict[str, Any]:
+        status = self.audio_runtime.set_microphone(device)
+        self.refresh_audio()
+        self.log("info", f"Microphone preference set to {device or 'automatic'}")
+        return status
+
+    def select_speaker(self, device: str | None) -> dict[str, Any]:
+        status = self.audio_runtime.set_speaker(device)
+        self.refresh_audio()
+        self.log("info", f"Speaker preference set to {device or 'automatic'}")
+        return status
 
     def audio_speak(self, text: str) -> dict[str, Any]:
         result = self.audio_runtime.speak_async(text)
@@ -1062,6 +1076,12 @@ def html_page() -> str:
           <button id="talkSpeak">Ask+Speak</button>
           <button id="talkListen">Listen 3s</button>
         </div>
+        <div class="talk-row">
+          <input id="audioMicOverride" maxlength="160" placeholder="Mic override, e.g. headset or plughw:CARD=...">
+          <button id="audioUseMic">Use Mic</button>
+          <button id="audioAutoMic">Auto Mic</button>
+          <button id="audioRefresh">Audio Refresh</button>
+        </div>
       </section>
       <section class="span-6">
         <h2>Camera</h2>
@@ -1158,6 +1178,7 @@ def html_page() -> str:
         `${{audio.microphone_available ? 'mic ok' : 'no mic'}} / ${{audio.speaker_available ? 'speaker ok' : 'no speaker'}}`;
       document.getElementById('audioMic').textContent = audio.selected_microphone || 'none';
       document.getElementById('audioSpeaker').textContent = audio.selected_speaker || 'none';
+      document.getElementById('audioMicOverride').placeholder = audio.requested_microphone || 'Mic override, e.g. headset or plughw:CARD=...';
       document.getElementById('audioEngines').textContent =
         `${{audio.stt_backend || 'stt?'}} / ${{audio.tts_backend || 'tts?'}}${{tts.detail ? ' / ' + tts.detail : ''}}`;
       const camera = data.camera || {{}};
@@ -1281,6 +1302,28 @@ def html_page() -> str:
         document.getElementById('talkSource').textContent = `${{result.talk.response_source}} / ${{result.talk.intent || 'none'}}`;
         document.getElementById('talkLatency').textContent = `${{result.talk.latency_ms.toFixed(2)}} ms`;
       }}
+      await refresh();
+    }});
+    document.getElementById('audioUseMic').addEventListener('click', async () => {{
+      const input = document.getElementById('audioMicOverride');
+      await api('/api/audio/select-microphone', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{device: input.value}})
+      }});
+      await refresh();
+    }});
+    document.getElementById('audioAutoMic').addEventListener('click', async () => {{
+      await api('/api/audio/select-microphone', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{device: ''}})
+      }});
+      document.getElementById('audioMicOverride').value = '';
+      await refresh();
+    }});
+    document.getElementById('audioRefresh').addEventListener('click', async () => {{
+      await api('/api/audio/refresh', {{method: 'POST'}});
       await refresh();
     }});
     document.getElementById('talkInput').addEventListener('keydown', async (event) => {{
@@ -1408,6 +1451,14 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/audio/refresh":
                 self.send_json(HTTPStatus.OK, self.context.refresh_audio())
                 return
+            if path == "/api/audio/select-microphone":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.select_microphone(body.get("device")))
+                return
+            if path == "/api/audio/select-speaker":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.select_speaker(body.get("device")))
+                return
             if path == "/api/audio/speak":
                 body = self.read_json()
                 self.send_json(HTTPStatus.OK, self.context.audio_speak(str(body.get("text", ""))))
@@ -1465,6 +1516,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--camera-detection-hold", type=float, default=2.0, help="Seconds to keep last human detection visible after missed frames.")
     parser.add_argument("--camera-confidence", type=float, default=0.30, help="Human detection confidence threshold. Default: 0.30.")
     parser.add_argument("--yolo-model", help="TFLite YOLO model path. Defaults to PLUTO_YOLO_MODEL or /home/pi/yolo/model/yolov8n-fp16.tflite.")
+    parser.add_argument("--microphone-device", help="Preferred ALSA microphone id/name, for example headset or plughw:CARD=...,DEV=0.")
+    parser.add_argument("--speaker-device", help="Preferred ALSA speaker id/name.")
     return parser.parse_args(argv)
 
 
@@ -1492,6 +1545,8 @@ def main(argv: list[str]) -> int:
         camera_detection_hold=args.camera_detection_hold,
         camera_confidence=args.camera_confidence,
         yolo_model=args.yolo_model,
+        microphone_device=args.microphone_device,
+        speaker_device=args.speaker_device,
     )
     server = PlutoWebServer((args.host, args.port), PlutoRequestHandler, context)
     print(f"PLUTO web shell running on {args.host}:{args.port}")
