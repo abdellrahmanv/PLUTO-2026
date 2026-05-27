@@ -93,7 +93,7 @@ External dependencies:
 | sample_rate | 16000 | 16000 recommended | Whisper-friendly speech input |
 | channels | 1 | 1 | Keeps CPU and file size low |
 | listen_duration_s | 3.0 | 0.5-8.0 | Short social questions |
-| min_rms | 0.006 | tune per room | Skip STT for silence/noise floor |
+| min_rms | 0.03 | tune per room | Skip STT for camera-mic noise floor |
 | max_input_words | 9 | 1-9 in v1 | Keeps response path bounded |
 | max_output_words | 9 | 1-9 in v1 | Keeps TTS fast and clear |
 | PLUTO_WHISPER_MODEL | unset | local model path | Override model discovery |
@@ -120,8 +120,9 @@ The website exposes three WELCOME_TALK controls:
 - `Listen 3s`: record from camera mic, transcribe, answer, and speak.
 
 Before Whisper runs, Pluto measures WAV RMS/peak. If the signal is below
-`min_rms`, it skips STT and returns the normal empty-input response. This keeps
-silent listens fast and avoids wasting CPU.
+`min_rms`, it skips STT and returns the normal empty-input response. The Pi
+camera mic showed an idle RMS near `0.018`, so v1 defaults to `0.03` to avoid
+wasting CPU on room noise.
 
 WELCOME_TALK still requires WELCOME state. If used outside WELCOME, it is
 blocked and the website shows `Enter WELCOME first.`

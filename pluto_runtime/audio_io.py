@@ -54,7 +54,7 @@ class AudioProbe:
     stt_detail: str = "not checked"
     tts_backend: str = "unavailable"
     tts_detail: str = "not checked"
-    min_rms: float = 0.006
+    min_rms: float = 0.03
     last_recording: dict[str, Any] | None = None
     last_transcript: dict[str, Any] | None = None
     last_tts: dict[str, Any] | None = None
@@ -70,7 +70,7 @@ class AudioRuntime:
         sample_rate: int = 16000,
         channels: int = 1,
         cache_dir: str | None = None,
-        min_rms: float = 0.006,
+        min_rms: float = 0.03,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
