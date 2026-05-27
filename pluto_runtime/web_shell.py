@@ -104,6 +104,8 @@ class WaveTriggerRuntime:
     last_result: dict[str, Any] | None = None
     last_reason: str = "no wave trigger yet"
     detector: dict[str, Any] = field(default_factory=dict)
+    pending_confirmed_until: float = 0.0
+    last_confirmed_detector: dict[str, Any] = field(default_factory=dict)
 
 
 class PlutoWebContext:
@@ -354,6 +356,9 @@ class PlutoWebContext:
     def welcome_wave_trigger(self, source: str = "website_wave_test", diagnostic: bool = False) -> dict[str, Any]:
         camera = status_to_dict(self.camera_service.get_status())
         wave_detector = self.update_wave_detector(camera)
+        pending_confirmed = time.time() <= self.wave.pending_confirmed_until and bool(self.wave.last_confirmed_detector)
+        if pending_confirmed and not wave_detector.get("confirmed", False):
+            wave_detector = dict(self.wave.last_confirmed_detector)
         human_count = int(camera.get("human_count") or 0)
         detections = camera.get("detections") or []
         target = detections[0] if detections else None
@@ -439,6 +444,9 @@ class PlutoWebContext:
         self.wave.detector = detector_status
         self.wave.detector_status = "simple_box_motion"
         if detector_status.get("confirmed"):
+            self.wave.pending_confirmed_until = time.time() + 1.5
+            self.wave.last_confirmed_detector = dict(detector_status)
+            self.camera_service.set_wave_lock(duration_s=4.0, label="WAVE LOCK")
             self.wave.last_reason = f"detected wave: {detector_status.get('reason')}"
         elif self.wave.last_event is None:
             self.wave.last_reason = str(detector_status.get("reason", "not checked"))
@@ -691,6 +699,7 @@ class PlutoWebContext:
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
             self.escalate_critical_alert_if_needed(stm32_runtime)
+            self.process_idle_wave_trigger()
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             status = PlutoStatus(
                 current_state=mode_snapshot["current_state"],
@@ -724,6 +733,16 @@ class PlutoWebContext:
     def wave_status(self) -> dict[str, Any]:
         self.update_wave_detector()
         return asdict(self.wave)
+
+    def process_idle_wave_trigger(self) -> None:
+        if self.mode_manager.current_state != "IDLE" or not self.wave.enabled:
+            return
+        detector = self.update_wave_detector()
+        if not detector.get("confirmed", False):
+            return
+        result = self.welcome_wave_trigger(source="camera_wave", diagnostic=False)
+        if result.get("accepted"):
+            self.log("pass", "IDLE real wave detected; WELCOME requested")
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
         in_error = mode_snapshot["current_state"] == "ERROR"

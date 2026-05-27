@@ -416,6 +416,8 @@ class CameraService:
         self.latest_detections: list[HumanDetection] = []
         self.latest_wave_motion: dict[str, Any] = {"available": False, "reason": "not_started"}
         self.previous_wave_roi = None
+        self.wave_lock_until = 0.0
+        self.wave_lock_label = "WAVE LOCK"
         self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
@@ -547,12 +549,22 @@ class CameraService:
             "confidence": det.confidence,
         }
 
+    def set_wave_lock(self, duration_s: float = 3.0, label: str = "WAVE LOCK") -> None:
+        with self.lock:
+            self.wave_lock_until = time.monotonic() + max(0.5, duration_s)
+            self.wave_lock_label = label
+
     def _draw_overlay(self, cv2, frame, detections: list[HumanDetection]) -> None:
+        lock_active = time.monotonic() < self.wave_lock_until
+        locked_det = max(detections, key=lambda item: max(0, item.bbox[2] - item.bbox[0]) * max(0, item.bbox[3] - item.bbox[1])) if detections else None
         for det in detections:
             x1, y1, x2, y2 = det.bbox
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"human {det.confidence:.2f}"
-            cv2.putText(frame, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            is_locked = lock_active and locked_det is det
+            color = (255, 0, 0) if is_locked else (0, 255, 0)
+            thickness = 3 if is_locked else 2
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            label = f"{self.wave_lock_label} {det.confidence:.2f}" if is_locked else f"human {det.confidence:.2f}"
+            cv2.putText(frame, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         fps = self.stream_fps_value
         inf_ms = self.detector.average_inference_ms() if self.detector else 0.0
@@ -589,6 +601,7 @@ class CameraService:
                 "video_devices": list_video_devices(),
                 "v4l2": v4l2_summary(),
                 "optimizations": ["threaded_capture", "frame_skip", "mjpg", "low_resolution", "warmup_suppression"],
+                "wave_lock_active": time.monotonic() < self.wave_lock_until,
             },
         )
 

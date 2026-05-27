@@ -55,7 +55,7 @@ class SimpleWaveDetector:
         min_direction_changes: int = 2,
         min_amplitude_norm: float = 0.045,
         min_width_change_norm: float = 0.065,
-        min_motion_norm: float = 0.018,
+        min_motion_norm: float = 0.012,
         min_motion_direction_changes: int = 2,
         min_confidence: float = 0.30,
         cooldown_s: float = 4.0,

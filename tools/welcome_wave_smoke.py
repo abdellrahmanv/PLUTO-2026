@@ -67,6 +67,7 @@ def run_checks(base: str, hardware_flow: bool) -> None:
     status = json.loads(raw_status.decode("utf-8"))
     assert "wave" in status
     assert status["wave"]["detector_status"] == "simple_box_motion"
+    assert "wave_lock_active" in status["camera"]["details"]
 
     if status["current_state"] == "ERROR":
         request(base, "/api/reset-error", "POST")
