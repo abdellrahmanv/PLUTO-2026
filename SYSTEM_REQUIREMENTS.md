@@ -226,6 +226,12 @@ robot noise, motor vibration, speaker feedback, and room noise.
 | AUD-010 | Speech recognition shall log confidence, recognized text, and selected response path. | Pi | Speech log review |
 | AUD-011 | If microphone captures robot motor noise above configured threshold, Pi shall reduce motion, pause listening, or warn operator. | Pi | Motor-noise test |
 | AUD-012 | Audio failure shall not affect STM32 heartbeat or motor safety. | Pi + STM32 | Audio fault test |
+| AUD-013 | WELCOME_TALK v1 shall limit recognized text passed to the answer layer to 9 words maximum. | Pi | Word-limit test |
+| AUD-014 | WELCOME_TALK v1 shall limit spoken/generated answers to 9 words maximum. | Pi | Response bank test |
+| AUD-015 | WELCOME_TALK v1 shall use deterministic local keyword/intent matching before any LLM path. | Pi | Response source log |
+| AUD-016 | Ollama/LLM fallback shall be disabled by default until measured latency is acceptable. | Pi | Config and latency test |
+| AUD-017 | If LLM fallback is enabled, Pi shall enforce timeout, input word limit, output word limit, and fallback behavior. | Pi | LLM fault test |
+| AUD-018 | If recognized speech exceeds the configured word limit, Pluto shall ask for a shorter question instead of sending it to LLM. | Pi | Long utterance test |
 
 ## Stepper Arm Requirements
 
@@ -757,6 +763,16 @@ WELCOME_DONE
 | STATE-3.37 | WELCOME_TALK shall log recognized text, confidence, response source, and response latency. | Pi | Speech log review |
 | STATE-3.38 | WELCOME gestures using the arm shall remain within WELCOME arm limits. | Pi + STM32 | Arm command log |
 
+### Simple Talk Subrequirements
+
+| ID | Requirement | Owner | Verification |
+| --- | --- | --- | --- |
+| STATE-3.33.1 | WELCOME_TALK v1 shall treat keyword/intent matching as the primary answer engine. | Pi | Response source log |
+| STATE-3.33.2 | WELCOME_TALK v1 shall reject or safely handle questions longer than 9 recognized words. | Pi | Word-limit test |
+| STATE-3.33.3 | WELCOME_TALK v1 shall keep each spoken answer at or below 9 words unless explicitly configured otherwise. | Pi | Response bank test |
+| STATE-3.33.4 | WELCOME_TALK shall use a local fallback answer when no keyword/intent match is found. | Pi | Unknown question test |
+| STATE-3.33.5 | WELCOME_TALK shall not call Ollama/LLM unless enabled by configuration and bounded by timeout. | Pi | LLM config test |
+
 ### Return Requirements
 
 | ID | Requirement | Owner | Verification |
@@ -1160,6 +1176,12 @@ GAME_LATER is not implemented in v1.
 | AUD-010 | MEM-007 | speech log review |
 | AUD-011 | motor-noise handling | `VER-AUD-003` |
 | AUD-012 | SYS-004 | audio fault test |
+| AUD-013 | STATE-3.33.2 | word-limit test |
+| AUD-014 | STATE-3.33.3 | response bank test |
+| AUD-015 | STATE-3.33.1 | response source log |
+| AUD-016 | STATE-3.33.5 | config and latency test |
+| AUD-017 | STATE-3.33.5 | LLM fault test |
+| AUD-018 | STATE-3.33.2 | long utterance test |
 
 ## Arm-To-Test Trace
 

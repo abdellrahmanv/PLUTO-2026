@@ -436,6 +436,8 @@ Features:
 - obstacle handling
 - arrival distance
 - simple talk fallback
+- 9-word talk input/output limits
+- keyword-first answer strategy
 - return lock
 - return completion
 - crowd handling
@@ -449,6 +451,7 @@ Approach             -> bounded motion
 Obstacle             -> stop/request space
 Person lost          -> stop/return decision
 Talk                 -> wheels stay stopped
+Talk answer          -> keyword-first, max 9 words
 Return               -> other modes blocked
 Return complete      -> IDLE
 ```
@@ -457,6 +460,12 @@ WELCOME wave trigger memory:
 
 ```text
 feature_memory/STATE-3.12_welcome_wave_trigger_detection.md
+```
+
+WELCOME talk strategy memory:
+
+```text
+feature_memory/STATE-3.33_welcome_talk_strategy_study.md
 ```
 
 ### Phase 10 - DANCE
