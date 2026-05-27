@@ -721,6 +721,7 @@ WELCOME_DONE
 | STATE-3.12.5 | Wave detection shall expose debug evidence: target ID, side, score, confidence, and confirmation reason. | Pi | Debug log review |
 | STATE-3.12.6 | If pose or wave dependencies are unavailable, WELCOME shall fall back to operator/web trigger. | Pi | Missing dependency test |
 | STATE-3.12.7 | Wave detection shall be implemented inside `WELCOME_DETECT`, not as a separate robot mode. | Pi | Mode/substate log |
+| STATE-3.12.8 | WELCOME wave v1 shall use lightweight existing camera detections before adding heavy pose dependencies. | Pi | Wave smoke test |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |

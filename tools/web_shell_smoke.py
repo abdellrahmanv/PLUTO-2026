@@ -68,6 +68,8 @@ def main() -> int:
         assert "stm32_runtime" in status
         assert "error" in status
         assert "manual" in status
+        assert "wave" in status
+        assert status["wave"]["detector_status"] == "simple_box_motion"
         assert "talk" in status
         assert "audio" in status
         assert "allowed_next_states" in status
@@ -99,6 +101,13 @@ def main() -> int:
         blocked = json.loads(blocked_raw.decode("utf-8"))
         assert blocked["accepted"] is False
         assert "GAME_LATER" in blocked["requested_state"]
+
+        wave_code, wave_raw = request("/api/welcome/wave-trigger", "POST", {"source": "smoke_test", "diagnostic": True})
+        assert wave_code == 200, wave_code
+        wave = json.loads(wave_raw.decode("utf-8"))
+        assert "event" in wave
+        assert wave["event"]["type"] == "WELCOME_TRIGGER:WAVE"
+        assert "wave" in wave or wave["accepted"] is False
 
         estop_code, estop_raw = request("/api/emergency-stop", "POST")
         assert estop_code == 200, estop_code

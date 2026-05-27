@@ -160,3 +160,26 @@ stt_backend = faster-whisper
 tts_backend = piper
 AUDIO_IO_SMOKE PASS
 ```
+
+## Phase 9B - WELCOME Wave Trigger
+
+Run the lightweight wave-trigger smoke test:
+
+```bash
+python3 tools/welcome_wave_smoke.py
+```
+
+With the Pi website and STM32 already running:
+
+```bash
+/home/pi/yolo/env/bin/python tools/welcome_wave_smoke.py --host 127.0.0.1 --port 8080 --external-server --hardware-flow
+```
+
+Useful endpoint:
+
+```text
+/api/welcome/wave-trigger
+```
+
+The v1 detector uses existing camera human boxes. It does not load MediaPipe or
+PyTorch and it never sends motor commands directly.

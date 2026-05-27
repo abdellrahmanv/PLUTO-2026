@@ -431,6 +431,7 @@ Features:
 
 - confirmed trigger
 - wave trigger detection inside `WELCOME_DETECT`
+- lightweight wave detector using existing camera boxes
 - target selection
 - approach
 - obstacle handling
@@ -457,6 +458,7 @@ Validation:
 ```text
 Trigger WELCOME      -> target selected
 Wave trigger         -> WELCOME_DETECT confirmed intent, no separate mode
+Wave detector        -> synthetic motion smoke and live event log
 Approach             -> bounded motion
 Obstacle             -> ultrasonic primary stop, vision reduces/stops early
 Person lost          -> stop/return decision

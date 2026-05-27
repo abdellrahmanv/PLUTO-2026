@@ -1,10 +1,10 @@
 # Feature Memory: WELCOME Wave Trigger Detection
 
-Status: design studied, merged into Phase 9 WELCOME design, implementation pending
+Status: lightweight v1 implemented, live robot validation pending
 
 Last updated: 2026-05-27
 
-Last validated: not implemented in Pluto runtime yet
+Last validated: 2026-05-27 local smoke test
 
 Owner: Pluto systems engineering
 
@@ -23,6 +23,8 @@ STATE-3.12.3
 STATE-3.12.4
 STATE-3.12.5
 STATE-3.12.6
+STATE-3.12.7
+STATE-3.12.8
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -41,6 +43,7 @@ WELCOME-WAVE-001 no-wave stability test
 WELCOME-WAVE-002 single-person wave trigger test
 WELCOME-WAVE-003 multi-person target selection test
 WELCOME-WAVE-004 missing dependency fallback test
+tools/welcome_wave_smoke.py
 ```
 
 ## Design Intent
@@ -129,17 +132,16 @@ Useful prototype constants found during study:
 | `WAVE_RAISED_MARGIN` | `0.0` | Wrist must be above shoulder |
 | `WAVE_COOLDOWN` | `20` frames | Keep wave state briefly after detection |
 
-## Proposed Pluto Implementation
+## Pluto v1 Implementation
 
 Use Pluto's existing Phase 4 camera stack as the base instead of importing the
 prototype unchanged.
 
-Preferred path:
+Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
-2. Add pose estimation only for the top one or two candidate people.
-3. Reuse the prototype wrist/shoulder wave logic after adapting it into a
-   headless module.
+2. Watch the largest human box over a short time window.
+3. Confirm only repeated lateral/width motion with direction changes.
 4. Publish a structured event:
 
 ```text
@@ -152,6 +154,23 @@ reason=<confirmed_wave>
 ```
 
 5. Let the mode manager accept or reject the event.
+
+Implemented module:
+
+```text
+pluto_runtime/wave_detection.py
+```
+
+Implemented API:
+
+```text
+POST /api/welcome/wave-trigger
+```
+
+This v1 detector is intentionally simpler than the local prototype. It does
+not prove wrist motion. It produces a conservative wave-like intent candidate
+from the existing person boxes and still depends on the mode manager and STM32
+stop guard before WELCOME entry.
 
 Avoid in the first Pluto implementation:
 
@@ -200,7 +219,7 @@ Website impact:
 
 - Show wave detector state when enabled.
 - Show selected target ID and confidence.
-- Show unavailable reason if pose dependencies are missing.
+- Show detector reason, sample count, score, confidence, side, and latest event.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -233,6 +252,12 @@ print("mediapipe ok")
 PY
 ```
 
+For v1 lightweight mode, MediaPipe is not required. The required smoke test is:
+
+```bash
+python tools/welcome_wave_smoke.py
+```
+
 4. Log every rejected wave candidate with reason:
 
 ```text
@@ -246,7 +271,8 @@ cooldown_active
 mode_gate_rejected
 ```
 
-5. Only after trigger logs are stable, connect it to WELCOME entry.
+5. Only after trigger logs are stable, allow non-diagnostic wave events to
+   request WELCOME entry.
 
 ## Safety Notes
 
@@ -262,3 +288,4 @@ WELCOME.
 | --- | --- | --- |
 | 2026-05-27 | Created feature memory from local wave detection study | Preserve design and defer implementation to WELCOME feature gate |
 | 2026-05-27 | Merged follow-wave into WELCOME | Keep wave as WELCOME_DETECT trigger, not a separate robot mode |
+| 2026-05-27 | Added lightweight v1 wave detector | Use existing camera boxes and avoid heavy pose dependencies |

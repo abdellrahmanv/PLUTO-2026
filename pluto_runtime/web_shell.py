@@ -29,6 +29,7 @@ from .audio_io import AudioRuntime
 from .camera import CameraService, status_to_dict
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
+from .wave_detection import SimpleWaveDetector
 from .welcome_talk import TalkResult, WelcomeTalkEngine
 
 
@@ -72,6 +73,7 @@ class PlutoStatus:
     stm32_runtime: dict[str, Any] = field(default_factory=dict)
     error: dict[str, Any] = field(default_factory=dict)
     manual: dict[str, Any] = field(default_factory=dict)
+    wave: dict[str, Any] = field(default_factory=dict)
     talk: dict[str, Any] = field(default_factory=dict)
     audio: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
@@ -90,6 +92,18 @@ class ManualRuntime:
     last_result: dict[str, Any] = field(default_factory=dict)
     command_count: int = 0
     blocked_reason: str | None = None
+
+
+@dataclass
+class WaveTriggerRuntime:
+    enabled: bool = True
+    detector_status: str = "simple_box_motion"
+    trigger_count: int = 0
+    rejected_count: int = 0
+    last_event: dict[str, Any] | None = None
+    last_result: dict[str, Any] | None = None
+    last_reason: str = "no wave trigger yet"
+    detector: dict[str, Any] = field(default_factory=dict)
 
 
 class PlutoWebContext:
@@ -114,6 +128,8 @@ class PlutoWebContext:
         self.mode_manager = ModeManager()
         self.stm32_link: Stm32SerialLink | None = None
         self.manual = ManualRuntime()
+        self.wave = WaveTriggerRuntime()
+        self.wave_detector = SimpleWaveDetector()
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -334,6 +350,83 @@ class PlutoWebContext:
         payload = result.to_dict()
         payload["stop_guard"] = stop_result
         return payload
+
+    def welcome_wave_trigger(self, source: str = "website_wave_test", diagnostic: bool = False) -> dict[str, Any]:
+        camera = status_to_dict(self.camera_service.get_status())
+        wave_detector = self.update_wave_detector(camera)
+        human_count = int(camera.get("human_count") or 0)
+        detections = camera.get("detections") or []
+        target = detections[0] if detections else None
+        event = {
+            "type": "WELCOME_TRIGGER:WAVE",
+            "source": source,
+            "diagnostic": bool(diagnostic),
+            "timestamp": time.time(),
+            "human_count": human_count,
+            "target_id": "human_0" if target else None,
+            "confidence": float(wave_detector.get("confidence") or (1.0 if diagnostic else 0.0)),
+            "score": float(wave_detector.get("score") or (1.0 if diagnostic else 0.0)),
+            "side": wave_detector.get("side", "unknown"),
+            "reason": "diagnostic_wave" if diagnostic else str(wave_detector.get("reason", "no_person")),
+            "mode_substate": self.mode_manager.current_substate,
+        }
+        self.wave.last_event = event
+
+        if not self.wave.enabled:
+            self.wave.rejected_count += 1
+            self.wave.last_reason = "wave trigger disabled"
+            payload = {"accepted": False, "reason": self.wave.last_reason, "event": event}
+            self.wave.last_result = payload
+            self.log("warn", "WELCOME wave trigger rejected: disabled")
+            return payload
+
+        if not diagnostic and not wave_detector.get("confirmed", False):
+            self.wave.rejected_count += 1
+            self.wave.last_reason = f"wave not confirmed: {event['reason']}"
+            payload = {"accepted": False, "reason": self.wave.last_reason, "event": event}
+            self.wave.last_result = payload
+            self.log("warn", f"WELCOME wave trigger rejected: {event['reason']}")
+            return payload
+
+        context = self.safety_context(operator_request=False, welcome_trigger_confirmed=True)
+        result = self.mode_manager.request_transition(
+            "WELCOME",
+            context,
+            source=source,
+            reason=f"{event['type']} accepted",
+        )
+
+        stop_result: dict[str, Any] | None = None
+        if result.accepted and result.requires_stop:
+            stm32 = self.hardware["stm32"]
+            stop_result = self.send_stm32_stop_safe(stm32.port)
+            self.log("stop", f"WELCOME wave trigger stop guard: {stop_result['detail']}")
+
+        if result.accepted:
+            self.wave.trigger_count += 1
+            self.wave.last_reason = "wave trigger accepted"
+        else:
+            self.wave.rejected_count += 1
+            self.wave.last_reason = result.reason
+
+        payload = result.to_dict()
+        payload["event"] = event
+        payload["stop_guard"] = stop_result
+        payload["wave"] = self.wave_status()
+        self.wave.last_result = payload
+        self.log("pass" if result.accepted else "warn", f"WELCOME wave trigger: {result.reason}")
+        return payload
+
+    def update_wave_detector(self, camera_status: dict[str, Any] | None = None) -> dict[str, Any]:
+        camera_status = camera_status or status_to_dict(self.camera_service.get_status())
+        detector_status = self.wave_detector.update(camera_status).to_dict()
+        self.wave.detector = detector_status
+        self.wave.detector_status = "simple_box_motion"
+        if detector_status.get("confirmed"):
+            self.wave.last_reason = f"detected wave: {detector_status.get('reason')}"
+        elif self.wave.last_event is None:
+            self.wave.last_reason = str(detector_status.get("reason", "not checked"))
+        return detector_status
 
     def update_manual_enabled(self, enabled: bool) -> None:
         self.manual.enabled = enabled
@@ -597,6 +690,7 @@ class PlutoWebContext:
                 stm32_runtime=stm32_runtime,
                 error=self.error_status(mode_snapshot, stm32_runtime),
                 manual=asdict(self.manual),
+                wave=self.wave_status(),
                 talk=self.talk_status(),
                 audio=self.audio_status(),
                 events=events,
@@ -610,6 +704,10 @@ class PlutoWebContext:
             "last_result": self.talk_last_result.to_dict() if self.talk_last_result else None,
             "history": [item.to_dict() for item in list(self.talk_history)[:8]],
         }
+
+    def wave_status(self) -> dict[str, Any]:
+        self.update_wave_detector()
+        return asdict(self.wave)
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
         in_error = mode_snapshot["current_state"] == "ERROR"
@@ -1027,6 +1125,7 @@ def html_page() -> str:
         <div class="actions" style="margin-top: 12px;">
           <button id="resetError">Reset To IDLE</button>
           <button id="injectFault">Inject Test Fault</button>
+          <button id="waveTrigger">Test Wave Trigger</button>
         </div>
         <div id="stateReasons" style="margin-top: 12px;"></div>
       </section>
@@ -1044,6 +1143,13 @@ def html_page() -> str:
         <div class="metric"><span class="label">Telemetry</span><span class="value" id="stmTel">...</span></div>
         <div class="metric"><span class="label">Obstacles</span><span class="value" id="stmObs">...</span></div>
         <div class="metric"><span class="label">Last Line</span><span class="value" id="stmLine">...</span></div>
+      </section>
+      <section class="span-6">
+        <h2>Welcome Wave</h2>
+        <div class="metric"><span class="label">Detector</span><span class="value" id="waveDetector">...</span></div>
+        <div class="metric"><span class="label">Last Reason</span><span class="value" id="waveReason">none</span></div>
+        <div class="metric"><span class="label">Counts</span><span class="value" id="waveCounts">0 / 0</span></div>
+        <div class="metric"><span class="label">Last Event</span><span class="value" id="waveEvent">none</span></div>
       </section>
       <section class="span-6">
         <h2>Manual Control</h2>
@@ -1153,6 +1259,15 @@ def html_page() -> str:
       document.getElementById('stmTel').textContent = stm.telemetry ? JSON.stringify(stm.telemetry) : '{{}}';
       document.getElementById('stmObs').textContent = stm.obstacles ? JSON.stringify(stm.obstacles) : '{{}}';
       document.getElementById('stmLine').textContent = stm.last_line || stm.error || 'none';
+      const wave = data.wave || {{}};
+      const waveEvent = wave.last_event || null;
+      const waveDetector = wave.detector || {{}};
+      document.getElementById('waveDetector').textContent = `${{wave.enabled ? 'enabled' : 'disabled'}} / ${{wave.detector_status || 'unknown'}}`;
+      document.getElementById('waveReason').textContent = wave.last_reason || 'none';
+      document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected`;
+      document.getElementById('waveEvent').textContent = waveEvent
+        ? `${{waveEvent.reason}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
+        : `${{waveDetector.reason || 'none'}} / samples ${{waveDetector.sample_count || 0}}`;
       const manual = data.manual || {{}};
       document.getElementById('manualEnabled').textContent = manual.enabled ? 'true' : 'false';
       document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;
@@ -1220,6 +1335,14 @@ def html_page() -> str:
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{reason: 'operator diagnostic test fault'}})
+      }});
+      await refresh();
+    }});
+    document.getElementById('waveTrigger').addEventListener('click', async () => {{
+      await api('/api/welcome/wave-trigger', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{source: 'website_wave_test', diagnostic: true}})
       }});
       await refresh();
     }});
@@ -1435,6 +1558,16 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                     self.context.request_state(
                         str(body.get("state", "")),
                         bool(body.get("reset_fault", False)),
+                    ),
+                )
+                return
+            if path == "/api/welcome/wave-trigger":
+                body = self.read_json()
+                self.send_json(
+                    HTTPStatus.OK,
+                    self.context.welcome_wave_trigger(
+                        source=str(body.get("source", "website_wave_test")),
+                        diagnostic=bool(body.get("diagnostic", False)),
                     ),
                 )
                 return
