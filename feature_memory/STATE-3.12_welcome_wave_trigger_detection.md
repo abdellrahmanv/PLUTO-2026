@@ -226,6 +226,24 @@ instead of the whole crowd. This keeps the computation closer to the desktop
 behavior while staying realistic on Raspberry Pi. WELCOME entry still depends
 on the mode manager and STM32 stop guard.
 
+Field tuning from Raspberry Pi validation:
+
+The desktop thresholds were designed around MediaPipe visibility at a higher
+frame rate. The Pi uses MoveNet INT8 at roughly the website stream cadence, so
+the active thresholds are deliberately a little more forgiving while preserving
+the same gates:
+
+| Gate | Desktop Reference | Pi Active Value | Reason |
+| --- | --- | --- | --- |
+| minimum samples | 6 usable pose samples | 5 usable pose samples | 8 Hz sampler needs faster confirmation |
+| hand amplitude | 0.18 shoulder widths | 0.14 shoulder widths | MoveNet wrist is noisier and sometimes underestimates motion |
+| direction changes | 2 | 2 | Keep real side-to-side wave requirement |
+| horizontal/vertical ratio | 1.30 | 1.10 | Accept natural diagonal hand waves |
+| keypoint confidence | 0.30 MediaPipe-style | 0.20 MoveNet score | MoveNet confidence scale is different |
+
+The background wave sampler updates detector evidence continuously for website
+debugging in all states. It only requests WELCOME when the robot is in IDLE.
+
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
 link is alive, recent telemetry is available, wheel speed is zero, and manual

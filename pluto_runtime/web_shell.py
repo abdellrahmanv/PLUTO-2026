@@ -204,6 +204,7 @@ class PlutoWebContext:
             started = time.monotonic()
             try:
                 with self.lock:
+                    self.update_wave_detector()
                     self.process_idle_wave_trigger()
                     self.wave.last_sample_at = time.time()
             except Exception as exc:
@@ -808,7 +809,7 @@ class PlutoWebContext:
     def process_idle_wave_trigger(self) -> None:
         if self.mode_manager.current_state != "IDLE" or not self.wave.enabled:
             return
-        detector = self.update_wave_detector()
+        detector = dict(self.wave.detector or self.update_wave_detector())
         if not detector.get("confirmed", False):
             return
         source = self.wave.armed_source if time.time() <= self.wave.armed_until and self.wave.armed_source else "camera_wave"
