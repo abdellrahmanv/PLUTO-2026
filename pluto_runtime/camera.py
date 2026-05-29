@@ -523,41 +523,78 @@ class CameraService:
             self.previous_wave_roi = None
             return {"available": False, "reason": "roi_too_small"}
 
+        import numpy as np
+
         crop = frame[top:bottom, left:right]
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-        roi = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
+        roi = cv2.resize(gray, (80, 80), interpolation=cv2.INTER_AREA)
+        roi = cv2.GaussianBlur(roi, (5, 5), 0)
         if self.previous_wave_roi is None:
             self.previous_wave_roi = roi
             return {"available": True, "reason": "priming", "motion_norm": 0.0, "balance": 0.0}
 
+        flow = cv2.calcOpticalFlowFarneback(
+            self.previous_wave_roi,
+            roi,
+            None,
+            0.5,
+            2,
+            11,
+            2,
+            5,
+            1.1,
+            0,
+        )
         diff = cv2.absdiff(roi, self.previous_wave_roi)
         self.previous_wave_roi = roi
-        active = diff > 18
+
+        # Remove global crop motion first. The remaining residual flow is much
+        # closer to "arm/hand moving while the person stays mostly still".
+        fx = flow[..., 0]
+        fy = flow[..., 1]
+        fx = fx - float(np.median(fx))
+        fy = fy - float(np.median(fy))
+        mag = np.sqrt((fx * fx) + (fy * fy))
+        adaptive_thresh = max(0.16, float(np.percentile(mag, 72)))
+        active_flow = mag > adaptive_thresh
+        active_diff = diff > 14
+        active = active_flow & active_diff
+        if active.mean() < 0.006:
+            active = active_flow
+
+        weights = mag * active
+        weight_sum = float(weights.sum())
         motion_norm = float(active.mean())
-        hand_valid = motion_norm >= 0.006
+        flow_dx = float((fx * weights).sum() / weight_sum) if weight_sum > 1e-6 else 0.0
+        flow_dy = float((fy * weights).sum() / weight_sum) if weight_sum > 1e-6 else 0.0
+        flow_dx_dy = abs(flow_dx) / (abs(flow_dy) + 1e-6)
+        hand_valid = motion_norm >= 0.006 and weight_sum > 1e-6
         hand_x_norm = 0.0
         hand_y_norm = 1.0
         raised_region = False
         if hand_valid:
-            ys, xs = active.nonzero()
-            cx_roi = float(xs.mean()) / 63.0
-            cy_roi = float(ys.mean()) / 63.0
+            yy, xx = np.indices(active.shape)
+            cx_roi = float((xx * weights).sum() / weight_sum) / 79.0
+            cy_roi = float((yy * weights).sum() / weight_sum) / 79.0
             hand_x = left + cx_roi * max(1, right - left)
             hand_y = top + cy_roi * max(1, bottom - top)
             hand_x_norm = float((hand_x - ((x1 + x2) / 2.0)) / box_w)
             hand_y_norm = float((hand_y - y1) / box_h)
-            raised_region = hand_y_norm <= 0.72
-        left_motion = float(active[:, :32].mean())
-        right_motion = float(active[:, 32:].mean())
+            raised_region = hand_y_norm <= 0.82
+        left_motion = float(weights[:, :40].sum())
+        right_motion = float(weights[:, 40:].sum())
         total = left_motion + right_motion
         balance = (right_motion - left_motion) / total if total > 0 else 0.0
         return {
             "available": True,
-            "reason": "ok",
+            "reason": "optical_flow",
             "motion_norm": motion_norm,
             "balance": balance,
             "left_motion": left_motion,
             "right_motion": right_motion,
+            "flow_dx": flow_dx,
+            "flow_dy": flow_dy,
+            "flow_dx_dy": flow_dx_dy,
             "hand_valid": hand_valid,
             "hand_x_norm": hand_x_norm,
             "hand_y_norm": hand_y_norm,

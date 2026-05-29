@@ -724,6 +724,7 @@ WELCOME_DONE
 | STATE-3.12.8 | WELCOME wave v1 shall use lightweight existing camera detections before adding heavy pose dependencies. | Pi | Wave smoke test |
 | STATE-3.12.9 | WELCOME wave v1 shall expose pixel-motion evidence from the upper human crop so real hand waves can be tuned without loading a pose model. | Pi | Wave debug log |
 | STATE-3.12.10 | WELCOME wave v1 shall reuse the desktop prototype's rule gates where practical: raised hand region, horizontal amplitude, x direction changes, horizontal-dominates-vertical ratio, confirmation streak, and cooldown. | Pi | Wave smoke test |
+| STATE-3.12.11 | WELCOME wave v1 shall use optical flow on a small upper-human crop to estimate hand motion under Raspberry Pi resource limits. | Pi | Wave debug log |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |

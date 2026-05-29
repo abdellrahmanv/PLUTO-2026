@@ -142,7 +142,7 @@ Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
 2. Watch the largest human box over a short time window.
-3. Extract a low-cost hand candidate from moving pixels inside an expanded
+3. Extract a low-cost hand candidate from optical flow inside an expanded
    upper person crop.
 4. Apply the desktop prototype's rules without loading its heavy stack:
    raised region, horizontal hand amplitude, x direction changes,
@@ -175,10 +175,11 @@ POST /api/welcome/wave-trigger
 
 This v1 detector is intentionally lighter than the local prototype but now
 uses the same decision logic. It does not prove MediaPipe wrist landmarks.
-Instead it estimates a moving hand candidate from the expanded upper crop and
-feeds that into PC-style wave gates. This catches real hand waves when the full
-person box is stable, while still depending on the mode manager and STM32 stop
-guard before WELCOME entry.
+Instead it estimates a moving hand candidate from optical flow in the expanded
+upper crop and feeds that into PC-style wave gates. Optical flow is stronger
+than frame differencing because it keeps direction evidence, subtracts global
+crop motion, and can see left/right hand movement even when the full person box
+is stable. WELCOME entry still depends on the mode manager and STM32 stop guard.
 
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
@@ -309,3 +310,4 @@ WELCOME.
 | 2026-05-27 | Reused degraded stop guard for wave trigger | Keep hardware validation consistent with WELCOME_TALK |
 | 2026-05-27 | Added upper-crop pixel motion evidence | Detect hand waves without requiring pose landmarks |
 | 2026-05-27 | Ported PC wave rules into Pi-friendly detector | Keep raised/oscillating-hand behavior without YOLOv5, SORT, or MediaPipe runtime |
+| 2026-05-29 | Replaced frame-diff hand estimate with optical flow | Preserve motion direction while staying light enough for Raspberry Pi |
