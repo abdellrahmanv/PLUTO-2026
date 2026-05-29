@@ -191,8 +191,14 @@ class ThreadedCamera:
         candidates: list[str | int] = []
         if self.device is not None:
             candidates.append(self.device)
-        candidates.extend(list_video_devices())
-        candidates.extend([0, 1])
+        else:
+            env_device = os.environ.get("PLUTO_CAMERA_DEVICE")
+            if env_device:
+                candidates.append(env_device)
+            # Raspberry Pi exposes many /dev/video* nodes that are not capture
+            # devices. Some block for several seconds when opened, so the
+            # automatic path only tries the normal primary camera endpoints.
+            candidates.extend(["/dev/video0", "/dev/video1", 0, 1])
 
         seen: set[str] = set()
         for candidate in candidates:
