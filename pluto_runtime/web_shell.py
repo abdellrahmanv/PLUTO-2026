@@ -97,7 +97,7 @@ class ManualRuntime:
 @dataclass
 class WaveTriggerRuntime:
     enabled: bool = True
-    detector_status: str = "tracked_pc_rule_lite"
+    detector_status: str = "tracked_pose_wave"
     armed_until: float = 0.0
     armed_source: str | None = None
     trigger_count: int = 0
@@ -122,6 +122,10 @@ class PlutoWebContext:
         camera_detection_hold: float = 2.0,
         camera_confidence: float = 0.30,
         yolo_model: str | None = None,
+        wave_pose_model: str | None = None,
+        wave_pose_disabled: bool = False,
+        wave_pose_frame_skip: int = 1,
+        wave_pose_max_tracks: int = 2,
         microphone_device: str | None = None,
         speaker_device: str | None = None,
     ) -> None:
@@ -158,6 +162,10 @@ class PlutoWebContext:
             detection_hold_s=camera_detection_hold,
             confidence_threshold=camera_confidence,
             model_path=yolo_model,
+            pose_model_path=wave_pose_model,
+            pose_enabled=not wave_pose_disabled,
+            pose_frame_skip=wave_pose_frame_skip,
+            pose_max_tracks=wave_pose_max_tracks,
         )
         if self.camera_service.start():
             self.log("pass", "Camera service started")
@@ -223,6 +231,7 @@ class PlutoWebContext:
                     "Emergency stop sends CMD:STOP when STM32 is available.",
                     "IDLE runtime keeps STM32 heartbeat alive when connected.",
                     "Camera feed uses threaded capture, frame skipping, MJPG, low resolution, and warmup suppression.",
+                    "WELCOME wave uses quantized MoveNet pose when available; pixel motion is debug-only.",
                     "WELCOME_TALK v1 can use website text, camera microphone STT, and local Piper TTS when available.",
                 ],
             }
@@ -465,7 +474,7 @@ class PlutoWebContext:
         camera_status = camera_status or status_to_dict(self.camera_service.get_status())
         detector_status = self.wave_detector.update(camera_status).to_dict()
         self.wave.detector = detector_status
-        self.wave.detector_status = str(detector_status.get("algorithm") or "tracked_pc_rule_lite")
+        self.wave.detector_status = str(detector_status.get("algorithm") or "tracked_pose_wave")
         if detector_status.get("confirmed"):
             self.wave.pending_confirmed_until = time.time() + 1.5
             self.wave.last_confirmed_detector = dict(detector_status)
@@ -1264,6 +1273,7 @@ def html_page() -> str:
         <div class="metric"><span class="label">Humans</span><span class="value" id="humanCount">0</span></div>
         <div class="metric"><span class="label">FPS</span><span class="value" id="cameraFps">0</span></div>
         <div class="metric"><span class="label">Inference</span><span class="value" id="cameraInference">0 ms</span></div>
+        <div class="metric"><span class="label">Pose</span><span class="value" id="cameraPose">not checked</span></div>
       </section>
       <section class="span-12">
         <h2>Events</h2>
@@ -1379,6 +1389,8 @@ def html_page() -> str:
       document.getElementById('humanCount').textContent = camera.human_count || 0;
       document.getElementById('cameraFps').textContent = `${{(camera.stream_fps || 0).toFixed(1)}} stream / ${{(camera.capture_fps || 0).toFixed(1)}} capture`;
       document.getElementById('cameraInference').textContent = `${{(camera.inference_ms || 0).toFixed(1)}} ms`;
+      document.getElementById('cameraPose').textContent =
+        `${{camera.pose_status || 'unknown'}} / ${{(camera.pose_inference_ms || 0).toFixed(1)}} ms`;
     }}
     async function refresh() {{
       try {{ render(await api('/api/status')); }}
@@ -1716,6 +1728,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--camera-detection-hold", type=float, default=2.0, help="Seconds to keep last human detection visible after missed frames.")
     parser.add_argument("--camera-confidence", type=float, default=0.30, help="Human detection confidence threshold. Default: 0.30.")
     parser.add_argument("--yolo-model", help="TFLite YOLO model path. Defaults to PLUTO_YOLO_MODEL or /home/pi/yolo/model/yolov8n-fp16.tflite.")
+    parser.add_argument("--wave-pose-model", help="MoveNet TFLite pose model path. Defaults to PLUTO_POSE_MODEL or bundled model.")
+    parser.add_argument("--wave-pose-disabled", action="store_true", help="Disable pose wave backend and expose wave as unavailable.")
+    parser.add_argument("--wave-pose-frame-skip", type=int, default=1, help="Run pose estimation every Nth processed camera frame. Default: 1.")
+    parser.add_argument("--wave-pose-max-tracks", type=int, default=2, help="Maximum tracked humans to run pose on. Default: 2.")
     parser.add_argument("--microphone-device", help="Preferred ALSA microphone id/name, for example headset or plughw:CARD=...,DEV=0.")
     parser.add_argument("--speaker-device", help="Preferred ALSA speaker id/name.")
     return parser.parse_args(argv)
@@ -1745,6 +1761,10 @@ def main(argv: list[str]) -> int:
         camera_detection_hold=args.camera_detection_hold,
         camera_confidence=args.camera_confidence,
         yolo_model=args.yolo_model,
+        wave_pose_model=args.wave_pose_model,
+        wave_pose_disabled=args.wave_pose_disabled,
+        wave_pose_frame_skip=args.wave_pose_frame_skip,
+        wave_pose_max_tracks=args.wave_pose_max_tracks,
         microphone_device=args.microphone_device,
         speaker_device=args.speaker_device,
     )

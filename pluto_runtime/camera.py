@@ -16,6 +16,11 @@ DEFAULT_MODEL_PATHS = (
     "models/yolov8n-fp16.tflite",
 )
 
+DEFAULT_POSE_MODEL_PATHS = (
+    "/home/pi/yolo/model/movenet_singlepose_lightning_int8.tflite",
+    "models/movenet_singlepose_lightning_int8.tflite",
+)
+
 
 @dataclass
 class HumanDetection:
@@ -46,6 +51,10 @@ class CameraStatus:
     wave_motion: dict[str, Any] = field(default_factory=dict)
     detector_status: str = "not_started"
     model_path: str | None = None
+    pose_status: str = "not_started"
+    pose_model_path: str | None = None
+    pose_inference_ms: float = 0.0
+    pose_inference_fps: float = 0.0
     error: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -54,6 +63,19 @@ def find_model_path() -> str | None:
     env_path = os.environ.get("PLUTO_YOLO_MODEL")
     candidates = [env_path] if env_path else []
     candidates.extend(DEFAULT_MODEL_PATHS)
+    for item in candidates:
+        if not item:
+            continue
+        path = Path(item)
+        if path.exists():
+            return str(path)
+    return None
+
+
+def find_pose_model_path() -> str | None:
+    env_path = os.environ.get("PLUTO_POSE_MODEL")
+    candidates = [env_path] if env_path else []
+    candidates.extend(DEFAULT_POSE_MODEL_PATHS)
     for item in candidates:
         if not item:
             continue
@@ -421,6 +443,10 @@ class CameraService:
         detection_hold_s: float = 2.0,
         warmup_frames: int = 5,
         model_path: str | None = None,
+        pose_model_path: str | None = None,
+        pose_enabled: bool = True,
+        pose_frame_skip: int = 1,
+        pose_max_tracks: int = 2,
         confidence_threshold: float = 0.30,
     ) -> None:
         self.device = device
@@ -431,9 +457,15 @@ class CameraService:
         self.detection_hold_s = max(0.0, detection_hold_s)
         self.warmup_frames = max(0, warmup_frames)
         self.model_path = model_path or find_model_path()
+        self.pose_model_path = pose_model_path or find_pose_model_path()
+        self.pose_enabled = pose_enabled
+        self.pose_frame_skip = max(1, pose_frame_skip)
+        self.pose_max_tracks = max(1, pose_max_tracks)
         self.confidence_threshold = confidence_threshold
         self.camera: ThreadedCamera | None = None
         self.detector: YoloHumanDetector | None = None
+        self.pose_estimator: Any | None = None
+        self.pose_error: str | None = None
         self.running = False
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
@@ -471,6 +503,21 @@ class CameraService:
                 self.detector = detector
             else:
                 self.error = detector.error
+
+        if self.pose_enabled:
+            if self.pose_model_path:
+                try:
+                    from .pose_wave import MovenetPoseEstimator
+
+                    pose = MovenetPoseEstimator(self.pose_model_path)
+                    if pose.load():
+                        self.pose_estimator = pose
+                    else:
+                        self.pose_error = pose.error
+                except Exception as exc:
+                    self.pose_error = f"pose backend unavailable: {exc}"
+            else:
+                self.pose_error = "pose model missing"
 
         self.running = True
         self.thread = threading.Thread(target=self._processing_loop, name="pluto-camera-processing", daemon=True)
@@ -517,10 +564,10 @@ class CameraService:
                     self.latest_detections = []
                     self._cleanup_tracks(time.monotonic())
 
-            wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections)
+            wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections, frame_index)
 
             annotated = frame.copy()
-            self._draw_overlay(cv2, annotated, self.latest_detections)
+            self._draw_overlay(cv2, annotated, self.latest_detections, wave_motion)
             ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 75])
             if ok:
                 with self.lock:
@@ -569,34 +616,105 @@ class CameraService:
         if self.wave_lock_track_id is not None and self.wave_lock_track_id not in active_ids and now >= self.wave_lock_until:
             self.wave_lock_track_id = None
 
-    def _estimate_wave_motion(self, cv2, frame, detections: list[HumanDetection]) -> dict[str, Any]:
+    def _estimate_wave_motion(self, cv2, frame, detections: list[HumanDetection], frame_index: int) -> dict[str, Any]:
         if not detections:
             self.previous_wave_rois.clear()
-            return {"available": False, "reason": "no_person"}
+            return {"available": False, "reason": "no_person", "frame_index": frame_index, "timestamp": time.time()}
 
-        candidates: list[dict[str, Any]] = []
+        pose_candidates: list[dict[str, Any]] = []
+        flow_candidates: list[dict[str, Any]] = []
         lock_active = time.monotonic() < self.wave_lock_until and self.wave_lock_track_id is not None
         ordered = sorted(detections, key=lambda item: box_area(item.bbox), reverse=True)
         if lock_active:
             locked = [item for item in ordered if item.track_id == self.wave_lock_track_id]
             ordered = locked or ordered[:1]
         else:
-            ordered = ordered[:3]
-        for det in ordered:
+            ordered = ordered[: max(1, self.pose_max_tracks)]
+
+        if self.pose_estimator is not None and frame_index % self.pose_frame_skip == 0:
+            for det in ordered:
+                candidate = self._estimate_detection_pose_wave(frame, det, frame_index)
+                if candidate.get("available"):
+                    pose_candidates.append(candidate)
+
+        for det in ordered[:3]:
             candidate = self._estimate_detection_wave_motion(cv2, frame, det)
             if candidate.get("available"):
-                candidates.append(candidate)
+                candidate["frame_index"] = frame_index
+                candidate["timestamp"] = time.time()
+                flow_candidates.append(candidate)
 
-        if not candidates:
-            return {"available": False, "reason": "no_wave_candidates", "candidates": []}
+        if pose_candidates:
+            best = max(pose_candidates, key=lambda item: float(item.get("pose_score") or item.get("confidence") or 0.0))
+            return {
+                **best,
+                "available": True,
+                "reason": "movenet_pose",
+                "candidates": pose_candidates,
+                "flow_candidates": flow_candidates,
+                "locked_track_id": self.wave_lock_track_id if lock_active else None,
+                "frame_index": frame_index,
+                "timestamp": time.time(),
+            }
 
-        best = max(candidates, key=lambda item: float(item.get("motion_norm") or 0.0))
+        if self.pose_estimator is not None:
+            return {
+                "available": False,
+                "reason": "pose_no_keypoints",
+                "candidates": [],
+                "flow_candidates": flow_candidates,
+                "locked_track_id": self.wave_lock_track_id if lock_active else None,
+                "frame_index": frame_index,
+                "timestamp": time.time(),
+            }
+
+        if not flow_candidates:
+            return {
+                "available": False,
+                "reason": self.pose_error or "pose_unavailable",
+                "candidates": [],
+                "flow_candidates": [],
+                "frame_index": frame_index,
+                "timestamp": time.time(),
+            }
+
+        best = max(flow_candidates, key=lambda item: float(item.get("motion_norm") or 0.0))
         return {
             **best,
             "available": True,
-            "reason": "multi_track_optical_flow",
-            "candidates": candidates,
+            "reason": "optical_flow_debug_only",
+            "candidates": [],
+            "flow_candidates": flow_candidates,
             "locked_track_id": self.wave_lock_track_id if lock_active else None,
+            "frame_index": frame_index,
+            "timestamp": time.time(),
+        }
+
+    def _estimate_detection_pose_wave(self, frame, det: HumanDetection, frame_index: int) -> dict[str, Any]:
+        track_id = int(det.track_id or 0)
+        if self.pose_estimator is None:
+            return {"available": False, "reason": "pose_unavailable", "track_id": track_id}
+
+        keypoints = self.pose_estimator.estimate(frame, det.bbox)
+        if not keypoints:
+            return {"available": False, "reason": "pose_no_keypoints", "track_id": track_id}
+
+        scores = [
+            float(keypoints[name][2])
+            for name in ("left_shoulder", "right_shoulder", "left_wrist", "right_wrist")
+            if name in keypoints
+        ]
+        pose_score = sum(scores) / max(len(scores), 1)
+        return {
+            "available": True,
+            "reason": "movenet_pose",
+            "track_id": track_id,
+            "bbox": det.bbox,
+            "confidence": det.confidence,
+            "pose_score": pose_score,
+            "pose_keypoints": keypoints,
+            "frame_index": frame_index,
+            "timestamp": time.time(),
         }
 
     def _estimate_detection_wave_motion(self, cv2, frame, det: HumanDetection) -> dict[str, Any]:
@@ -715,7 +833,7 @@ class CameraService:
             self.wave_lock_until = 0.0
             self.wave_lock_track_id = None
 
-    def _draw_overlay(self, cv2, frame, detections: list[HumanDetection]) -> None:
+    def _draw_overlay(self, cv2, frame, detections: list[HumanDetection], wave_motion: dict[str, Any] | None = None) -> None:
         lock_active = time.monotonic() < self.wave_lock_until
         locked_det = None
         if detections:
@@ -736,16 +854,52 @@ class CameraService:
             label = f"{self.wave_lock_label} {label_id}{det.confidence:.2f}" if is_locked else f"{label_id}human {det.confidence:.2f}"
             cv2.putText(frame, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
+        for candidate in (wave_motion or {}).get("candidates", []) or []:
+            if not isinstance(candidate, dict):
+                continue
+            if lock_active and self.wave_lock_track_id is not None and candidate.get("track_id") != self.wave_lock_track_id:
+                continue
+            self._draw_pose_keypoints(cv2, frame, candidate.get("pose_keypoints") or {})
+
         fps = self.stream_fps_value
         inf_ms = self.detector.average_inference_ms() if self.detector else 0.0
-        text = f"FPS {fps:.1f} | Humans {len(detections)} | Inf {inf_ms:.0f}ms"
+        pose_ms = self.pose_estimator.average_inference_ms() if self.pose_estimator else 0.0
+        text = f"FPS {fps:.1f} | Humans {len(detections)} | Y {inf_ms:.0f}ms | P {pose_ms:.0f}ms"
         cv2.rectangle(frame, (5, 5), (310, 34), (0, 0, 0), -1)
         cv2.putText(frame, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 0), 1)
+
+    def _draw_pose_keypoints(self, cv2, frame, keypoints: dict[str, Any]) -> None:
+        if not keypoints:
+            return
+        pairs = [
+            ("left_shoulder", "left_elbow"),
+            ("left_elbow", "left_wrist"),
+            ("right_shoulder", "right_elbow"),
+            ("right_elbow", "right_wrist"),
+            ("left_shoulder", "right_shoulder"),
+        ]
+        for first, second in pairs:
+            a = keypoints.get(first)
+            b = keypoints.get(second)
+            if not a or not b or float(a[2]) < 0.20 or float(b[2]) < 0.20:
+                continue
+            cv2.line(frame, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (255, 255, 0), 2)
+        for point in keypoints.values():
+            if not point or float(point[2]) < 0.20:
+                continue
+            cv2.circle(frame, (int(point[0]), int(point[1])), 3, (255, 0, 255), -1)
 
     def _build_status(self, available: bool, running: bool, error: str | None = None, warmup_remaining: int = 0) -> CameraStatus:
         camera = self.camera
         detector = self.detector
         detections = list(self.latest_detections)
+        pose_status = self.pose_estimator.status_dict(self.pose_max_tracks, self.pose_frame_skip) if self.pose_estimator else {
+            "status": "unavailable" if self.pose_enabled else "disabled",
+            "model_path": self.pose_model_path,
+            "inference_ms": 0.0,
+            "inference_fps": 0.0,
+            "error": self.pose_error,
+        }
         return CameraStatus(
             available=available,
             running=running,
@@ -766,14 +920,26 @@ class CameraService:
             wave_motion=dict(self.latest_wave_motion),
             detector_status=detector.status if detector else "unavailable",
             model_path=self.model_path,
+            pose_status=str(pose_status.get("status", "unknown")),
+            pose_model_path=self.pose_model_path,
+            pose_inference_ms=float(pose_status.get("inference_ms") or 0.0),
+            pose_inference_fps=float(pose_status.get("inference_fps") or 0.0),
             error=error or self.error,
             details={
                 "video_devices": list_video_devices(),
                 "v4l2": v4l2_summary(),
-                "optimizations": ["threaded_capture", "frame_skip", "mjpg", "low_resolution", "warmup_suppression"],
+                "optimizations": [
+                    "threaded_capture",
+                    "frame_skip",
+                    "mjpg",
+                    "low_resolution",
+                    "warmup_suppression",
+                    "movenet_int8_pose_crops",
+                ],
                 "wave_lock_active": time.monotonic() < self.wave_lock_until,
                 "wave_locked_track_id": self.wave_lock_track_id,
                 "active_track_ids": sorted(self.tracks.keys()),
+                "pose": pose_status,
             },
         )
 

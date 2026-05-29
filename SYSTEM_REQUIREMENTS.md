@@ -729,6 +729,10 @@ WELCOME_DONE
 | STATE-3.12.13 | After a person waves, WELCOME wave v1 shall visually lock only that track with a red box and suppress other person boxes while the lock is active. | Pi | Camera overlay review |
 | STATE-3.12.14 | The website wave test control shall arm a real wave wait window; it shall not force WELCOME or red lock without confirmed wave evidence. | Pi | Website arm-wave test |
 | STATE-3.12.15 | WELCOME wave v1 shall not lock or enter WELCOME from broad person-box movement or generic optical-flow movement alone. | Pi | False-positive smoke test |
+| STATE-3.12.16 | WELCOME wave v1 shall prefer quantized pose keypoints for wrist/shoulder evidence when the pose model and LiteRT runtime are available. | Pi | Pose wave smoke test |
+| STATE-3.12.17 | WELCOME wave v1 shall treat optical-flow motion as debug evidence only unless explicitly enabled by a future requirement. | Pi | False-positive smoke test |
+| STATE-3.12.18 | WELCOME wave v1 shall prevent duplicate website polling from reusing the same camera frame as new wave history. | Pi | Duplicate-frame test |
+| STATE-3.12.19 | WELCOME wave v1 shall expose pose backend status and pose inference latency in website/camera status. | Pi | Website pose status test |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |

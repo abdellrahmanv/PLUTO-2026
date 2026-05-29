@@ -66,7 +66,7 @@ def run_checks(base: str, hardware_flow: bool) -> None:
     assert status_code == 200, status_code
     status = json.loads(raw_status.decode("utf-8"))
     assert "wave" in status
-    assert status["wave"]["detector_status"] in {"tracked_pc_rule_lite", "simple_box_motion"}
+    assert status["wave"]["detector_status"] in {"tracked_pose_wave", "tracked_pc_rule_lite", "simple_box_motion"}
     assert "wave_lock_active" in status["camera"]["details"]
 
     if status["current_state"] == "ERROR":
@@ -104,16 +104,37 @@ def run_detector_checks() -> None:
     detector = SimpleWaveDetector(cooldown_s=0.5)
     base = {"available": True, "resolution": [320, 320], "detections": []}
 
+    def pose(hand_x: float, hand_y: float = -0.55, score: float = 0.85) -> dict:
+        shoulder_left = [120.0, 120.0, score]
+        shoulder_right = [200.0, 120.0, score]
+        shoulder_center_x = 160.0
+        shoulder_center_y = 120.0
+        shoulder_width = 80.0
+        wrist = [
+            shoulder_center_x + hand_x * shoulder_width,
+            shoulder_center_y + hand_y * shoulder_width,
+            score,
+        ]
+        return {
+            "left_shoulder": shoulder_left,
+            "right_shoulder": shoulder_right,
+            "left_elbow": [(shoulder_left[0] + wrist[0]) / 2, (shoulder_left[1] + wrist[1]) / 2, score],
+            "right_elbow": [220.0, 160.0, score],
+            "left_wrist": wrist,
+            "right_wrist": [230.0, 170.0, score],
+        }
+
     for index in range(8):
         status = detector.update(
             {
                 **base,
-                "detections": [{"bbox": [100, 60, 210, 260], "confidence": 0.85}],
+                "detections": [{"bbox": [100, 60, 210, 260], "confidence": 0.85, "track_id": 1}],
+                "wave_motion": {"frame_index": index, "reason": "pose_unavailable", "candidates": []},
             },
             now=float(index) * 0.2,
         )
     assert status.confirmed is False
-    assert status.reason in {"not_enough_direction_changes", "amplitude_too_low", "hand_not_raised"}
+    assert status.reason in {"not_enough_samples", "pose_unavailable"}
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     centers = [150, 175, 136, 180, 132, 176, 134, 178]
@@ -122,46 +143,70 @@ def run_detector_checks() -> None:
         status = detector.update(
             {
                 **base,
-                "detections": [{"bbox": [center - width / 2, 60, center + width / 2, 260], "confidence": 0.88}],
+                "detections": [{"bbox": [center - width / 2, 60, center + width / 2, 260], "confidence": 0.88, "track_id": 1}],
+                "wave_motion": {"frame_index": index, "reason": "optical_flow_debug_only", "candidates": []},
             },
             now=float(index) * 0.2,
         )
     assert status.confirmed is False, status
-    assert status.reason in {"hand_not_raised", "amplitude_too_low"}, status
+    assert status.reason in {"pose_unavailable", "not_enough_samples"}, status
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
-    balances = [-0.7, 0.6, -0.65, 0.7, -0.6, 0.65, -0.7, 0.6]
-    for index, balance in enumerate(balances):
+    for index, hand_x in enumerate([-0.45, 0.30, -0.38, 0.34, -0.42, 0.36, -0.40]):
         status = detector.update(
             {
                 **base,
-                "detections": [{"bbox": [105, 60, 215, 260], "confidence": 0.86}],
-                "wave_motion": {"motion_norm": 0.045, "balance": balance},
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87, "track_id": 1}],
+                "wave_motion": {
+                    "frame_index": index,
+                    "reason": "movenet_pose",
+                    "candidates": [
+                        {"track_id": 1, "pose_keypoints": pose(hand_x, hand_y=0.55), "confidence": 0.87}
+                    ],
+                },
             },
             now=float(index) * 0.2,
         )
     assert status.confirmed is False, status
-    assert status.reason in {"hand_not_raised", "hand_amplitude_too_low"}, status
+    assert status.reason in {"hand_not_raised", "pose_not_enough_samples"}, status
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     for index, hand_x in enumerate([0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32]):
         status = detector.update(
             {
                 **base,
-                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87}],
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87, "track_id": 1}],
                 "wave_motion": {
-                    "motion_norm": 0.030,
-                    "balance": 0.5,
-                    "hand_valid": True,
-                    "hand_x_norm": hand_x,
-                    "hand_y_norm": 0.35,
-                    "raised_region": True,
+                    "frame_index": index,
+                    "reason": "movenet_pose",
+                    "candidates": [
+                        {"track_id": 1, "pose_keypoints": pose(hand_x), "confidence": 0.87}
+                    ],
                 },
             },
             now=float(index) * 0.2,
         )
     assert status.confirmed is False, status
-    assert status.reason in {"not_enough_direction_changes", "hand_amplitude_too_low"}, status
+    assert status.reason in {"not_enough_direction_changes", "hand_amplitude_too_low", "pose_not_enough_samples"}, status
+
+    detector = SimpleWaveDetector(cooldown_s=0.5)
+    for index, hand_x in enumerate([-0.45, 0.30, -0.38, 0.34, -0.42, 0.36, -0.40]):
+        status = detector.update(
+            {
+                **base,
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87, "track_id": 1}],
+                "wave_motion": {
+                    "frame_index": 99,
+                    "reason": "movenet_pose",
+                    "candidates": [
+                        {"track_id": 1, "pose_keypoints": pose(hand_x), "confidence": 0.87}
+                    ],
+                },
+            },
+            now=float(index) * 0.2,
+        )
+    assert status.confirmed is False, status
+    assert status.sample_count <= 1, status
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     hand_positions = [-0.45, 0.30, -0.38, 0.34, -0.42, 0.36, -0.40]
@@ -170,14 +215,13 @@ def run_detector_checks() -> None:
         status = detector.update(
             {
                 **base,
-                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87}],
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87, "track_id": 1}],
                 "wave_motion": {
-                    "motion_norm": 0.030,
-                    "balance": 0.5 if hand_x > 0 else -0.5,
-                    "hand_valid": True,
-                    "hand_x_norm": hand_x,
-                    "hand_y_norm": 0.35,
-                    "raised_region": True,
+                    "frame_index": index,
+                    "reason": "movenet_pose",
+                    "candidates": [
+                        {"track_id": 1, "pose_keypoints": pose(hand_x), "confidence": 0.87}
+                    ],
                 },
             },
             now=float(index) * 0.2,
@@ -185,7 +229,7 @@ def run_detector_checks() -> None:
         if status.confirmed and status.reason == "confirmed_wave":
             confirmed_status = status
     assert confirmed_status is not None, status
-    assert confirmed_status.algorithm == "tracked_pc_rule_lite", confirmed_status
+    assert confirmed_status.algorithm == "tracked_pose_wave", confirmed_status
     assert confirmed_status.raised is True, confirmed_status
     assert confirmed_status.hand_amp >= 0.16, confirmed_status
     assert confirmed_status.hand_sign_changes >= 2, confirmed_status
@@ -203,17 +247,14 @@ def run_detector_checks() -> None:
                 ],
                 "wave_motion": {
                     "available": True,
-                    "reason": "multi_track_optical_flow",
+                    "frame_index": index,
+                    "reason": "movenet_pose",
                     "candidates": [
-                        {"track_id": 1, "motion_norm": 0.004, "balance": 0.0, "hand_valid": False},
+                        {"track_id": 1, "pose_keypoints": pose(0.10), "confidence": 0.80},
                         {
                             "track_id": 2,
-                            "motion_norm": 0.034,
-                            "balance": 0.5 if hand_x > 0 else -0.5,
-                            "hand_valid": True,
-                            "hand_x_norm": hand_x,
-                            "hand_y_norm": 0.32,
-                            "raised_region": True,
+                            "pose_keypoints": pose(hand_x),
+                            "confidence": 0.89,
                         },
                     ],
                 },

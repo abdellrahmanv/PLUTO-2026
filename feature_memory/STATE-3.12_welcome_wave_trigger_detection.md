@@ -1,10 +1,10 @@
 # Feature Memory: WELCOME Wave Trigger Detection
 
-Status: lightweight v1 implemented, live robot validation pending
+Status: quantized pose v1 implemented, live robot validation pending
 
-Last updated: 2026-05-27
+Last updated: 2026-05-29
 
-Last validated: 2026-05-27 local smoke test
+Last validated: 2026-05-29 local smoke test
 
 Owner: Pluto systems engineering
 
@@ -26,6 +26,16 @@ STATE-3.12.6
 STATE-3.12.7
 STATE-3.12.8
 STATE-3.12.9
+STATE-3.12.10
+STATE-3.12.11
+STATE-3.12.12
+STATE-3.12.13
+STATE-3.12.14
+STATE-3.12.15
+STATE-3.12.16
+STATE-3.12.17
+STATE-3.12.18
+STATE-3.12.19
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -142,16 +152,18 @@ Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
 2. Assign lightweight track IDs to visible people with IoU/center matching.
-3. Keep one wave buffer and confirmation streak per track.
-4. Extract a low-cost hand candidate from optical flow inside each selected
-   upper person crop.
-5. Apply the desktop prototype's rules without loading its heavy stack:
-   raised region, horizontal hand amplitude, x direction changes,
+3. Run quantized MoveNet SinglePose Lightning INT8 on the selected tracked
+   person crops when LiteRT/TFLite is available.
+4. Extract shoulder, elbow, and wrist keypoints from the pose model.
+5. Keep one wave buffer and confirmation streak per track.
+6. Apply the desktop prototype's rules directly to pose keypoints:
+   wrist above shoulder, horizontal hand amplitude, x direction changes,
    horizontal-dominates-vertical ratio, confirmation streak, and cooldown.
-6. Reject broad box motion and generic optical-flow motion unless the tracked
-   hand-wave rule confirms. These broad motion signals are debug evidence only,
-   not lock evidence.
-7. Publish a structured event:
+7. Keep optical-flow motion as debug evidence only. It must not confirm WELCOME
+   or create a red lock in the current requirement baseline.
+8. Prevent website polling from reusing the same camera frame as fake new wave
+   history by tagging camera wave evidence with a frame index.
+9. Publish a structured event:
 
 ```text
 WELCOME_TRIGGER:WAVE
@@ -195,13 +207,19 @@ Implemented API:
 POST /api/welcome/wave-trigger
 ```
 
-This v1 detector is intentionally lighter than the local prototype but now
-uses the same interaction logic. It does not prove MediaPipe wrist landmarks.
-Instead it assigns simple track IDs, estimates a moving hand candidate from
-optical flow in each selected upper crop, and feeds that into PC-style wave
-gates. Optical flow is stronger than frame differencing because it keeps
-direction evidence, subtracts global crop motion, and can see left/right hand
-movement even when the full person box is stable. WELCOME entry still depends
+This v1 detector now uses the same meaningful evidence as the desktop
+prototype: wrist and shoulder keypoints. MediaPipe is not used on the Pi because
+the current Pi environment is Python 3.13 on Debian 13 and MediaPipe wheels are
+not available there. The replacement is a bundled quantized MoveNet TFLite
+model:
+
+```text
+models/movenet_singlepose_lightning_int8.tflite
+```
+
+The camera service runs the pose model only on selected tracked person crops
+instead of the whole crowd. This keeps the computation closer to the desktop
+behavior while staying realistic on Raspberry Pi. WELCOME entry still depends
 on the mode manager and STM32 stop guard.
 
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
@@ -234,10 +252,10 @@ torchvision
 scipy
 ```
 
-This is heavier than the current Pluto camera runtime. The Raspberry Pi
-currently runs Phase 4 through `/home/pi/yolo/env`, which is optimized around
-OpenCV, NumPy, and TFLite. Before implementation, verify whether MediaPipe is
-available and whether CPU load remains acceptable.
+This is heavier than the Phase 4 camera runtime, but lighter than the desktop
+stack. The Raspberry Pi currently runs Phase 4 through `/home/pi/yolo/env`,
+which has OpenCV, NumPy, and `ai_edge_litert`. The selected deployment path is
+MoveNet INT8 via LiteRT, not MediaPipe.
 
 ## Interfaces
 
@@ -263,6 +281,7 @@ Website impact:
   `hand_sign_changes`, and `hand_dx_dy` so hand-wave tuning is visible.
 - Show `track_id`, visible track IDs, and locked track ID for multi-person
   debugging.
+- Show pose backend status, pose model path, and pose inference latency.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -275,6 +294,7 @@ Website impact:
 | WELCOME-WAVE-004 | Run without pose dependency | Website reports unavailable and operator trigger still works |
 | WELCOME-WAVE-005 | Move arm randomly below shoulder | No trigger |
 | WELCOME-WAVE-006 | Trigger while WELCOME_RETURN is active | Trigger rejected by mode manager |
+| WELCOME-WAVE-007 | Refresh `/api/status` repeatedly on one frozen frame | Sample count does not advance as fake wave history |
 
 ## Debug Checklist
 
@@ -286,16 +306,17 @@ curl http://127.0.0.1:8080/api/camera/status
 
 2. Confirm person boxes are stable before testing wave.
 
-3. Confirm pose dependency import:
+3. Confirm pose dependency import and model load:
 
 ```bash
 /home/pi/yolo/env/bin/python - <<'PY'
-import mediapipe
-print("mediapipe ok")
+from pluto_runtime.pose_wave import MovenetPoseEstimator
+p = MovenetPoseEstimator("models/movenet_singlepose_lightning_int8.tflite")
+print(p.load(), p.status, p.error)
 PY
 ```
 
-For v1 lightweight mode, MediaPipe is not required. The required smoke test is:
+The required smoke test is:
 
 ```bash
 python tools/welcome_wave_smoke.py
@@ -306,6 +327,8 @@ python tools/welcome_wave_smoke.py
 ```text
 no_person
 pose_unavailable
+pose_no_keypoints
+pose_not_enough_samples
 wrist_not_visible
 wrist_not_raised
 amplitude_too_low
@@ -339,3 +362,5 @@ WELCOME.
 | 2026-05-29 | Added lightweight multi-person tracking and red lock overlay | Match desktop behavior: choose one waving target and suppress other boxes |
 | 2026-05-29 | Changed website wave test into an arm/wait control | Prevent fake locks before a real wave is detected |
 | 2026-05-29 | Removed broad motion fallback as confirmation evidence | Prevent auto-selecting a person who did not wave |
+| 2026-05-29 | Added MoveNet INT8 pose backend | Replace failing optical-flow-only wave logic with real shoulder/wrist evidence on Python 3.13 Pi |
+| 2026-05-29 | Added frame-index dedupe | Prevent website polling from creating fake gesture history |
