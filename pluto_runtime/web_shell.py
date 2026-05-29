@@ -519,11 +519,29 @@ class PlutoWebContext:
                 duration_s=4.0,
                 label="WAVE LOCK",
                 track_id=detector_status.get("track_id"),
+                bbox=self.wave_lock_bbox(camera_status, detector_status.get("track_id")),
             )
             self.wave.last_reason = f"detected wave: {detector_status.get('reason')}"
         elif self.wave.last_event is None:
             self.wave.last_reason = str(detector_status.get("reason", "not checked"))
         return detector_status
+
+    @staticmethod
+    def wave_lock_bbox(camera_status: dict[str, Any], track_id: Any) -> list[int] | None:
+        try:
+            target_id = int(track_id)
+        except (TypeError, ValueError):
+            return None
+        for detection in camera_status.get("detections") or []:
+            if not isinstance(detection, dict):
+                continue
+            try:
+                det_id = int(detection.get("track_id"))
+            except (TypeError, ValueError):
+                continue
+            if det_id == target_id and detection.get("bbox"):
+                return [int(value) for value in detection["bbox"]]
+        return None
 
     def update_manual_enabled(self, enabled: bool) -> None:
         self.manual.enabled = enabled

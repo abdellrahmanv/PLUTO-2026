@@ -484,6 +484,8 @@ class CameraService:
         self.wave_lock_until = 0.0
         self.wave_lock_label = "WAVE LOCK"
         self.wave_lock_track_id: int | None = None
+        self.wave_lock_anchor_bbox: list[int] | None = None
+        self.wave_lock_anchor_updated_at = 0.0
         self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
@@ -591,7 +593,23 @@ class CameraService:
         self._cleanup_tracks(now)
         available_ids = set(self.tracks.keys())
         assigned: list[HumanDetection] = []
-        for det in sorted(detections, key=lambda item: box_area(item.bbox), reverse=True):
+
+        remaining = sorted(detections, key=lambda item: box_area(item.bbox), reverse=True)
+        locked_det = self._claim_locked_detection(remaining, now)
+        if locked_det is not None and self.wave_lock_track_id is not None:
+            locked_det.track_id = self.wave_lock_track_id
+            self.tracks[self.wave_lock_track_id] = {
+                "bbox": list(locked_det.bbox),
+                "last_seen": now,
+                "confidence": locked_det.confidence,
+                "locked": True,
+            }
+            self.wave_lock_anchor_bbox = list(locked_det.bbox)
+            self.wave_lock_anchor_updated_at = now
+            available_ids.discard(self.wave_lock_track_id)
+            assigned.append(locked_det)
+
+        for det in remaining:
             best_id: int | None = None
             best_score = 0.0
             for track_id in list(available_ids):
@@ -613,6 +631,34 @@ class CameraService:
             assigned.append(det)
         return assigned
 
+    def _claim_locked_detection(self, detections: list[HumanDetection], now: float) -> HumanDetection | None:
+        if not detections or self.wave_lock_track_id is None or now >= self.wave_lock_until:
+            return None
+        anchor = self.wave_lock_anchor_bbox
+        if anchor is None:
+            track = self.tracks.get(self.wave_lock_track_id)
+            anchor = list(track["bbox"]) if track and track.get("bbox") else None
+        if anchor is None:
+            return None
+
+        best_index: int | None = None
+        best_score = -999.0
+        for index, det in enumerate(detections):
+            iou = bbox_iou(det.bbox, anchor)
+            dist = normalized_center_distance(det.bbox, anchor)
+            score = (iou * 2.0) + (1.0 - dist)
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        if best_index is None:
+            return None
+
+        candidate = detections[best_index]
+        if bbox_iou(candidate.bbox, anchor) < 0.03 and normalized_center_distance(candidate.bbox, anchor) > 1.2:
+            return None
+        return detections.pop(best_index)
+
     def _cleanup_tracks(self, now: float) -> None:
         stale = [track_id for track_id, item in self.tracks.items() if now - float(item.get("last_seen", 0.0)) > 2.0]
         active_ids = set(self.tracks.keys()) - set(stale)
@@ -621,6 +667,7 @@ class CameraService:
             self.previous_wave_rois.pop(track_id, None)
         if self.wave_lock_track_id is not None and self.wave_lock_track_id not in active_ids and now >= self.wave_lock_until:
             self.wave_lock_track_id = None
+            self.wave_lock_anchor_bbox = None
 
     def _estimate_wave_motion(self, cv2, frame, detections: list[HumanDetection], frame_index: int) -> dict[str, Any]:
         if not detections:
@@ -828,23 +875,36 @@ class CameraService:
             "confidence": det.confidence,
         }
 
-    def set_wave_lock(self, duration_s: float = 3.0, label: str = "WAVE LOCK", track_id: int | None = None) -> None:
+    def set_wave_lock(
+        self,
+        duration_s: float = 3.0,
+        label: str = "WAVE LOCK",
+        track_id: int | None = None,
+        bbox: list[int] | None = None,
+    ) -> None:
         with self.lock:
             self.wave_lock_until = time.monotonic() + max(0.5, duration_s)
             self.wave_lock_label = label
             self.wave_lock_track_id = track_id
+            if bbox is None and track_id is not None:
+                match = next((item for item in self.latest_detections if item.track_id == track_id), None)
+                bbox = list(match.bbox) if match else None
+            if bbox is not None:
+                self.wave_lock_anchor_bbox = [int(value) for value in bbox]
+                self.wave_lock_anchor_updated_at = time.monotonic()
 
     def clear_wave_lock(self) -> None:
         with self.lock:
             self.wave_lock_until = 0.0
             self.wave_lock_track_id = None
+            self.wave_lock_anchor_bbox = None
 
     def _draw_overlay(self, cv2, frame, detections: list[HumanDetection], wave_motion: dict[str, Any] | None = None) -> None:
         lock_active = time.monotonic() < self.wave_lock_until
         locked_det = None
         if detections:
             if lock_active and self.wave_lock_track_id is not None:
-                locked_det = next((item for item in detections if item.track_id == self.wave_lock_track_id), None)
+                locked_det = self._locked_detection_for_overlay(detections)
             if locked_det is None:
                 locked_det = max(detections, key=lambda item: box_area(item.bbox))
         visible_detections = [locked_det] if lock_active and locked_det is not None else detections
@@ -873,6 +933,21 @@ class CameraService:
         text = f"FPS {fps:.1f} | Humans {len(detections)} | Y {inf_ms:.0f}ms | P {pose_ms:.0f}ms"
         cv2.rectangle(frame, (5, 5), (310, 34), (0, 0, 0), -1)
         cv2.putText(frame, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 0), 1)
+
+    def _locked_detection_for_overlay(self, detections: list[HumanDetection]) -> HumanDetection | None:
+        if self.wave_lock_track_id is None:
+            return None
+        direct = next((item for item in detections if item.track_id == self.wave_lock_track_id), None)
+        if direct is not None:
+            self.wave_lock_anchor_bbox = list(direct.bbox)
+            self.wave_lock_anchor_updated_at = time.monotonic()
+            return direct
+        if self.wave_lock_anchor_bbox is None:
+            return None
+        best = min(detections, key=lambda item: normalized_center_distance(item.bbox, self.wave_lock_anchor_bbox))
+        if normalized_center_distance(best.bbox, self.wave_lock_anchor_bbox) <= 1.2:
+            return best
+        return None
 
     def _draw_pose_keypoints(self, cv2, frame, keypoints: dict[str, Any]) -> None:
         if not keypoints:
@@ -944,6 +1019,8 @@ class CameraService:
                 ],
                 "wave_lock_active": time.monotonic() < self.wave_lock_until,
                 "wave_locked_track_id": self.wave_lock_track_id,
+                "wave_lock_anchor_bbox": self.wave_lock_anchor_bbox,
+                "wave_lock_anchor_age_s": time.monotonic() - self.wave_lock_anchor_updated_at if self.wave_lock_anchor_updated_at else None,
                 "active_track_ids": sorted(self.tracks.keys()),
                 "pose": pose_status,
             },

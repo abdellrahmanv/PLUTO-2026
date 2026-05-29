@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from pluto_runtime.wave_detection import SimpleWaveDetector
+from pluto_runtime.camera import CameraService, HumanDetection
 
 
 HOST = "127.0.0.1"
@@ -268,9 +269,33 @@ def run_detector_checks() -> None:
     assert confirmed_status.target_id == "track_2", confirmed_status
 
 
+def run_camera_lock_checks() -> None:
+    camera = CameraService()
+    now = 100.0
+    camera.tracks = {
+        1: {"bbox": [15, 50, 120, 270], "last_seen": now, "confidence": 0.80},
+        2: {"bbox": [170, 45, 310, 285], "last_seen": now, "confidence": 0.89},
+    }
+    camera.wave_lock_track_id = 2
+    camera.wave_lock_until = now + 5.0
+    camera.wave_lock_anchor_bbox = [170, 45, 310, 285]
+
+    assigned = camera._assign_tracks(
+        [
+            HumanDetection(bbox=[18, 52, 124, 272], confidence=0.80),
+            HumanDetection(bbox=[172, 47, 312, 286], confidence=0.89),
+        ],
+        now + 0.1,
+    )
+    locked = next(item for item in assigned if item.track_id == 2)
+    assert locked.bbox == [172, 47, 312, 286], assigned
+    assert camera.wave_lock_anchor_bbox == [172, 47, 312, 286], camera.wave_lock_anchor_bbox
+
+
 def main() -> int:
     args = parse_args()
     run_detector_checks()
+    run_camera_lock_checks()
     base = f"http://{args.host}:{args.port}"
     proc = None
     if not args.external_server:

@@ -38,6 +38,7 @@ STATE-3.12.18
 STATE-3.12.19
 STATE-3.12.20
 STATE-3.12.21
+STATE-3.12.22
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -244,6 +245,17 @@ the same gates:
 The background wave sampler updates detector evidence continuously for website
 debugging in all states. It only requests WELCOME when the robot is in IDLE.
 
+Two-person lock behavior:
+
+The red `WAVE LOCK` target is not allowed to jump to another person just
+because the lightweight tracker briefly swaps IDs. When a wave is confirmed,
+the camera service stores both the confirmed track ID and the confirmed
+person's bounding box as a spatial anchor. During the lock window, the tracker
+claims the detection closest to that anchor for the locked ID before assigning
+other people. The anchor is updated frame by frame as the locked person moves.
+This is not full face/person re-identification, but it prevents the common
+two-person red-box jump seen in field testing.
+
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
 link is alive, recent telemetry is available, wheel speed is zero, and manual
@@ -320,6 +332,7 @@ Website impact:
 | WELCOME-WAVE-006 | Trigger while WELCOME_RETURN is active | Trigger rejected by mode manager |
 | WELCOME-WAVE-007 | Refresh `/api/status` repeatedly on one frozen frame | Sample count does not advance as fake wave history |
 | WELCOME-WAVE-008 | Stop browser polling and wave in front of camera | Background sampler still detects and locks |
+| WELCOME-WAVE-009 | Two people visible after one person waves | Red box remains on the anchored waver track |
 
 ## Debug Checklist
 
@@ -390,3 +403,4 @@ WELCOME.
 | 2026-05-29 | Added MoveNet INT8 pose backend | Replace failing optical-flow-only wave logic with real shoulder/wrist evidence on Python 3.13 Pi |
 | 2026-05-29 | Added frame-index dedupe | Prevent website polling from creating fake gesture history |
 | 2026-05-29 | Added runtime wave sampler and threshold display | Match the desktop video-loop behavior and make field tuning visible |
+| 2026-05-29 | Added spatially sticky wave lock anchor | Keep red target focus on the person who actually waved when two people are visible |

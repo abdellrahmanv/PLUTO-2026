@@ -735,6 +735,7 @@ WELCOME_DONE
 | STATE-3.12.19 | WELCOME wave v1 shall expose pose backend status and pose inference latency in website/camera status. | Pi | Website pose status test |
 | STATE-3.12.20 | WELCOME wave v1 shall sample pose-wave evidence continuously in the runtime background, not only when the website refreshes. | Pi | Live wave timing test |
 | STATE-3.12.21 | WELCOME wave v1 shall expose its active arm-motion thresholds in the website status for field tuning. | Pi | Website threshold review |
+| STATE-3.12.22 | After WELCOME wave lock, the red target box shall stay spatially anchored to the confirmed waver if lightweight track IDs temporarily swap. | Pi | Two-person lock smoke test |
 | STATE-3.13 | If multiple people trigger, Pi shall select one active target and keep attention locked. | Pi | Crowd test |
 | STATE-3.14 | Pi shall ignore additional welcome triggers while WELCOME is already active. | Pi | Crowd/transition test |
 | STATE-3.15 | Pi shall record selected target ID or target source for debugging. | Pi | Trigger log |
