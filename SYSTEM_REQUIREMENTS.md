@@ -941,6 +941,12 @@ while never sacrificing obstacle safety.
 | STATE-4.26 | DANCE shall use optimized vision perception when available to detect humans or obstacles entering the dance envelope. | Pi | Vision safety test |
 | STATE-4.27 | DANCE vision safety should use threaded capture, low resolution, frame skipping, detection hold, and tracked boxes to keep latency bounded. | Pi | CPU/FPS log |
 | STATE-4.28 | If vision detects a human or obstacle near the dance envelope, Pi shall shrink, pause, or stop dance motion. | Pi + STM32 | Dance obstacle test |
+| STATE-4.28.1 | Initial DANCE implementation shall run in dry-run mode until bounded audio, obstacle, vision, and proposed-motion evidence are reviewed. | Pi | Dry-run smoke test |
+| STATE-4.28.2 | DANCE dry-run shall not send `CMD:DRIVE` or `CMD:ARM`; it may only send `CMD:STOP` as a guard. | Pi + STM32 | Serial command log |
+| STATE-4.28.3 | DANCE dry-run shall expose dance step, audio readiness, obstacle status, vision envelope status, proposed motion, range limit, and reason on the website. | Pi | Website status review |
+| STATE-4.28.4 | DANCE dry-run shall propose STOP if STM32 obstacle telemetry is missing, blocked, or if vision reports a person inside the dance envelope. | Pi | Planner smoke test |
+| STATE-4.28.5 | DANCE dry-run shall keep a fixed facing direction by proposing zero steer for wheel movement in v1. | Pi | Command proposal review |
+| STATE-4.28.6 | DANCE dry-run shall keep a STOP guard active while the DANCE state is evaluated. | Pi + STM32 | STOP guard log |
 
 ### Exit Requirements
 

@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 from .audio_io import AudioRuntime
 from .camera import CameraService, status_to_dict
+from .dance import DanceDryRunPlanner, DanceStatus
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 from .wave_detection import SimpleWaveDetector
@@ -76,6 +77,7 @@ class PlutoStatus:
     manual: dict[str, Any] = field(default_factory=dict)
     wave: dict[str, Any] = field(default_factory=dict)
     welcome_approach: dict[str, Any] = field(default_factory=dict)
+    dance: dict[str, Any] = field(default_factory=dict)
     talk: dict[str, Any] = field(default_factory=dict)
     audio: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
@@ -149,6 +151,10 @@ class PlutoWebContext:
         self.approach_planner = WelcomeApproachPlanner()
         self.approach_status = ApproachStatus()
         self.approach_last_stop_at = 0.0
+        self.dance_planner = DanceDryRunPlanner()
+        self.dance_status = DanceStatus()
+        self.dance_started_at: float | None = None
+        self.dance_last_stop_at = 0.0
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -275,6 +281,7 @@ class PlutoWebContext:
                     "WELCOME wave uses quantized MoveNet pose when available; pixel motion is debug-only.",
                     "WELCOME_TALK v1 can use website text, camera microphone STT, and local Piper TTS when available.",
                     "WELCOME_APPROACH Phase 10 is dry-run only: it computes target, safety, and proposed motion while holding STOP.",
+                    "DANCE is dry-run only until bounded audio, obstacle, and proposed-motion evidence are reviewed.",
                 ],
             }
             if stm32.connected:
@@ -801,6 +808,8 @@ class PlutoWebContext:
             camera_status = status_to_dict(self.camera_service.get_status())
             welcome_approach = self.update_welcome_approach(mode_snapshot, camera_status, stm32_runtime)
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
+            dance = self.update_dance_runtime(mode_snapshot, camera_status, stm32_runtime)
+            mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             status = PlutoStatus(
                 current_state=mode_snapshot["current_state"],
                 current_substate=mode_snapshot["current_substate"],
@@ -817,6 +826,7 @@ class PlutoWebContext:
                 manual=asdict(self.manual),
                 wave=self.wave_status(),
                 welcome_approach=welcome_approach,
+                dance=dance,
                 talk=self.talk_status(),
                 audio=self.audio_status(),
                 events=events,
@@ -883,6 +893,57 @@ class PlutoWebContext:
                 status.stop_guard = {"ok": True, "detail": "recent STOP guard still valid", "degraded": False}
 
         self.approach_status = status
+        return status.to_dict()
+
+    def update_dance_runtime(
+        self,
+        mode_snapshot: dict[str, Any] | None = None,
+        camera_status: dict[str, Any] | None = None,
+        stm32_runtime: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        mode_snapshot = mode_snapshot or self.mode_manager.snapshot(self.safety_context(operator_request=True))
+        camera_status = camera_status or status_to_dict(self.camera_service.get_status())
+        stm32_runtime = stm32_runtime or (stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {})
+
+        if self.mode_manager.current_state == "DANCE":
+            if self.dance_started_at is None:
+                self.dance_started_at = time.time()
+            if self.mode_manager.current_substate == "DANCE_READY":
+                self.mode_manager.set_substate("DANCE_DRY_RUN", return_lock=False)
+        else:
+            self.dance_started_at = None
+
+        status = self.dance_planner.compute(
+            camera_status=camera_status,
+            stm32_runtime=stm32_runtime,
+            audio_status=self.audio_status(),
+            current_state=self.mode_manager.current_state,
+            current_substate=self.mode_manager.current_substate,
+            dance_started_at=self.dance_started_at,
+        )
+
+        if status.active:
+            now = time.monotonic()
+            if now - self.dance_last_stop_at >= 1.0:
+                stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+                status.stop_guard = self.degraded_stop_guard_if_safe(stop)
+                self.dance_last_stop_at = now
+                if self.hardware["stm32"].connected and not status.stop_guard.get("ok"):
+                    transition = self.mode_manager.enter_error(
+                        "Unable to verify stopped wheels during DANCE dry-run",
+                        source="dance",
+                    )
+                    status.active = False
+                    status.proposed_motion = "stop"
+                    status.proposed_speed = 0
+                    status.proposed_steer = 0
+                    status.reason = "stop guard failed"
+                    status.stop_guard["transition"] = transition.to_dict()
+                    self.log("error", f"DANCE dry-run stop guard failed: {status.stop_guard.get('detail')}")
+            elif not status.stop_guard:
+                status.stop_guard = {"ok": True, "detail": "recent STOP guard still valid", "degraded": False}
+
+        self.dance_status = status
         return status.to_dict()
 
     def process_idle_wave_trigger(self) -> None:
@@ -1366,6 +1427,22 @@ def html_page() -> str:
         </div>
       </section>
       <section class="span-6">
+        <h2>Dance</h2>
+        <div class="metric"><span class="label">Mode</span><span class="value" id="danceMode">dry-run</span></div>
+        <div class="metric"><span class="label">Audio</span><span class="value" id="danceAudio">unknown</span></div>
+        <div class="metric"><span class="label">Step</span><span class="value" id="danceStep">idle</span></div>
+        <div class="metric"><span class="label">Obstacles</span><span class="value" id="danceObstacles">unknown</span></div>
+        <div class="metric"><span class="label">Vision</span><span class="value" id="danceVision">unknown</span></div>
+        <div class="metric"><span class="label">Proposal</span><span class="value" id="danceProposal">stop</span></div>
+        <div class="metric"><span class="label">Envelope</span><span class="value" id="danceEnvelope">0 cm</span></div>
+        <div class="metric"><span class="label">Reason</span><span class="value" id="danceReason">not evaluated</span></div>
+        <div class="metric"><span class="label">STOP Guard</span><span class="value" id="danceStop">none</span></div>
+        <div class="actions" style="margin-top: 12px;">
+          <button class="primary" id="danceStart">Start Dance Dry Run</button>
+          <button id="danceStopBtn">Stop Dance</button>
+        </div>
+      </section>
+      <section class="span-6">
         <h2>Welcome Talk</h2>
         <div class="metric"><span class="label">Version</span><span class="value" id="talkVersion">v1</span></div>
         <div class="metric"><span class="label">Limits</span><span class="value" id="talkLimits">9 in / 9 out</span></div>
@@ -1504,6 +1581,22 @@ def html_page() -> str:
         btn.disabled = !manual.enabled;
       }});
       document.getElementById('manualStop').disabled = !manual.enabled;
+      const dance = data.dance || {{}};
+      const danceStop = dance.stop_guard || {{}};
+      document.getElementById('danceMode').textContent =
+        `${{dance.active ? 'active' : 'inactive'}} / ${{dance.dry_run ? 'dry-run' : 'live'}} / ${{(dance.elapsed_s || 0).toFixed(1)}}s`;
+      document.getElementById('danceAudio').textContent =
+        `${{dance.audio_status || 'unknown'}} / speaker ${{dance.speaker_available ? 'ok' : 'no'}} / file ${{dance.audio_file_present ? 'ok' : 'missing'}}`;
+      document.getElementById('danceStep').textContent = dance.dance_step || 'idle';
+      document.getElementById('danceObstacles').textContent = dance.obstacle_status || 'unknown';
+      document.getElementById('danceVision').textContent =
+        `${{dance.vision_status || 'unknown'}} / ${{dance.vision_reason || 'not evaluated'}}`;
+      document.getElementById('danceProposal').textContent =
+        `${{dance.proposed_motion || 'stop'}} / speed ${{dance.proposed_speed || 0}} / steer ${{dance.proposed_steer || 0}}`;
+      document.getElementById('danceEnvelope').textContent = `${{dance.max_translation_cm || 0}} cm max`;
+      document.getElementById('danceReason').textContent = dance.reason || 'not evaluated';
+      document.getElementById('danceStop').textContent =
+        danceStop.detail ? `${{danceStop.ok ? 'ok' : 'fail'}} / ${{danceStop.detail}}` : 'none';
       const talk = data.talk || {{}};
       const lastTalk = talk.last_result || null;
       document.getElementById('talkVersion').textContent = `${{talk.version || 'v1'}} / ${{talk.primary_engine || 'keyword'}}`;
@@ -1619,6 +1712,22 @@ def html_page() -> str:
     }});
     document.getElementById('manualStop').addEventListener('click', async () => {{
       await manualStop();
+    }});
+    document.getElementById('danceStart').addEventListener('click', async () => {{
+      await api('/api/request-state', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{state: 'DANCE'}})
+      }});
+      await refresh();
+    }});
+    document.getElementById('danceStopBtn').addEventListener('click', async () => {{
+      await api('/api/request-state', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{state: 'IDLE'}})
+      }});
+      await refresh();
     }});
     async function submitTalk(speak) {{
       const input = document.getElementById('talkInput');

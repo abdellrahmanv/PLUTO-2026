@@ -204,3 +204,24 @@ welcome_approach.dry_run = true
 No CMD:DRIVE is sent by WELCOME_APPROACH
 STOP guard remains active while approach is evaluated
 ```
+
+## DANCE Dry Run
+
+Run the DANCE planner smoke test:
+
+```bash
+python3 tools/dance_smoke.py
+```
+
+With the Pi website open, select DANCE from IDLE or press `Start Dance Dry Run`
+in the Dance panel. This phase computes bounded fixed-facing dance proposals
+and safety gates only.
+
+Expected evidence:
+
+```text
+DANCE_SMOKE PASS
+dance.dry_run = true
+No CMD:DRIVE or CMD:ARM is sent by DANCE
+STOP guard remains active while DANCE is evaluated
+```

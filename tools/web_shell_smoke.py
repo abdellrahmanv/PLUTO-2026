@@ -71,6 +71,8 @@ def main() -> int:
         assert "wave" in status
         assert "welcome_approach" in status
         assert status["welcome_approach"]["dry_run"] is True
+        assert "dance" in status
+        assert status["dance"]["dry_run"] is True
         assert status["wave"]["detector_status"] in {"tracked_pose_wave", "tracked_pc_rule_lite", "simple_box_motion"}
         assert "talk" in status
         assert "audio" in status

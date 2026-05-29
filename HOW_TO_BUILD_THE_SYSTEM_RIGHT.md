@@ -545,6 +545,15 @@ Speaker missing  -> blocked or explicit silent mode
 STM32 alert      -> ERROR
 ```
 
+DANCE dry-run implementation files:
+
+```text
+feature_memory/STATE-4_dance_dry_run.md
+pluto_runtime/dance.py
+pluto_runtime/web_shell.py
+tools/dance_smoke.py
+```
+
 ### Phase 11 - Final Auto Setup
 
 Goal:
