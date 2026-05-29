@@ -36,6 +36,8 @@ STATE-3.12.16
 STATE-3.12.17
 STATE-3.12.18
 STATE-3.12.19
+STATE-3.12.20
+STATE-3.12.21
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -163,7 +165,9 @@ Implemented v1 path:
    or create a red lock in the current requirement baseline.
 8. Prevent website polling from reusing the same camera frame as fake new wave
    history by tagging camera wave evidence with a frame index.
-9. Publish a structured event:
+9. Run the wave detector from a background runtime sampler at about the camera
+   stream rate. The website must not be the timing source for gesture history.
+10. Publish a structured event:
 
 ```text
 WELCOME_TRIGGER:WAVE
@@ -282,6 +286,8 @@ Website impact:
 - Show `track_id`, visible track IDs, and locked track ID for multi-person
   debugging.
 - Show pose backend status, pose model path, and pose inference latency.
+- Show active thresholds: hand amplitude, direction changes, horizontal/vertical
+  ratio, keypoint confidence, and sampling rate.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -295,6 +301,7 @@ Website impact:
 | WELCOME-WAVE-005 | Move arm randomly below shoulder | No trigger |
 | WELCOME-WAVE-006 | Trigger while WELCOME_RETURN is active | Trigger rejected by mode manager |
 | WELCOME-WAVE-007 | Refresh `/api/status` repeatedly on one frozen frame | Sample count does not advance as fake wave history |
+| WELCOME-WAVE-008 | Stop browser polling and wave in front of camera | Background sampler still detects and locks |
 
 ## Debug Checklist
 
@@ -364,3 +371,4 @@ WELCOME.
 | 2026-05-29 | Removed broad motion fallback as confirmation evidence | Prevent auto-selecting a person who did not wave |
 | 2026-05-29 | Added MoveNet INT8 pose backend | Replace failing optical-flow-only wave logic with real shoulder/wrist evidence on Python 3.13 Pi |
 | 2026-05-29 | Added frame-index dedupe | Prevent website polling from creating fake gesture history |
+| 2026-05-29 | Added runtime wave sampler and threshold display | Match the desktop video-loop behavior and make field tuning visible |

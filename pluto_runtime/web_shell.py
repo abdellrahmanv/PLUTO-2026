@@ -98,6 +98,9 @@ class ManualRuntime:
 class WaveTriggerRuntime:
     enabled: bool = True
     detector_status: str = "tracked_pose_wave"
+    sample_hz: float = 8.0
+    last_sample_at: float | None = None
+    thresholds: dict[str, Any] = field(default_factory=dict)
     armed_until: float = 0.0
     armed_source: str | None = None
     trigger_count: int = 0
@@ -138,6 +141,9 @@ class PlutoWebContext:
         self.manual = ManualRuntime()
         self.wave = WaveTriggerRuntime()
         self.wave_detector = SimpleWaveDetector()
+        self.wave.thresholds = self.wave_detector.thresholds()
+        self.wave_thread_running = True
+        self.wave_thread: threading.Thread | None = None
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -172,10 +178,39 @@ class PlutoWebContext:
         else:
             self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
         self.refresh_hardware()
+        self.start_wave_monitor()
 
     def log(self, level: str, message: str) -> None:
         with self.lock:
             self.events.appendleft(Event(time.time(), level, message))
+
+    def start_wave_monitor(self) -> None:
+        if self.wave_thread and self.wave_thread.is_alive():
+            return
+        self.wave_thread_running = True
+        self.wave_thread = threading.Thread(target=self._wave_monitor_loop, name="pluto-wave-monitor", daemon=True)
+        self.wave_thread.start()
+
+    def stop(self) -> None:
+        self.wave_thread_running = False
+        if self.wave_thread and self.wave_thread.is_alive():
+            self.wave_thread.join(timeout=1.0)
+        self.stop_stm32_link()
+        self.camera_service.stop()
+
+    def _wave_monitor_loop(self) -> None:
+        period_s = 1.0 / max(1.0, self.wave.sample_hz)
+        while self.wave_thread_running:
+            started = time.monotonic()
+            try:
+                with self.lock:
+                    self.process_idle_wave_trigger()
+                    self.wave.last_sample_at = time.time()
+            except Exception as exc:
+                self.log("warn", f"Wave monitor error: {exc}")
+                time.sleep(0.5)
+            elapsed = time.monotonic() - started
+            time.sleep(max(0.01, period_s - elapsed))
 
     def refresh_hardware(self) -> None:
         self.stop_stm32_link()
@@ -475,6 +510,7 @@ class PlutoWebContext:
         detector_status = self.wave_detector.update(camera_status).to_dict()
         self.wave.detector = detector_status
         self.wave.detector_status = str(detector_status.get("algorithm") or "tracked_pose_wave")
+        self.wave.thresholds = dict(detector_status.get("thresholds") or self.wave_detector.thresholds())
         if detector_status.get("confirmed"):
             self.wave.pending_confirmed_until = time.time() + 1.5
             self.wave.last_confirmed_detector = dict(detector_status)
@@ -767,7 +803,6 @@ class PlutoWebContext:
         }
 
     def wave_status(self) -> dict[str, Any]:
-        self.update_wave_detector()
         return asdict(self.wave)
 
     def process_idle_wave_trigger(self) -> None:
@@ -1223,6 +1258,8 @@ def html_page() -> str:
         <div class="metric"><span class="label">Detector</span><span class="value" id="waveDetector">...</span></div>
         <div class="metric"><span class="label">Last Reason</span><span class="value" id="waveReason">none</span></div>
         <div class="metric"><span class="label">Counts</span><span class="value" id="waveCounts">0 / 0</span></div>
+        <div class="metric"><span class="label">Thresholds</span><span class="value" id="waveThresholds">...</span></div>
+        <div class="metric"><span class="label">Sampler</span><span class="value" id="waveSampler">...</span></div>
         <div class="metric"><span class="label">Last Event</span><span class="value" id="waveEvent">none</span></div>
       </section>
       <section class="span-6">
@@ -1341,6 +1378,11 @@ def html_page() -> str:
       document.getElementById('waveReason').textContent = wave.last_reason || 'none';
       const armed = wave.armed_until && (Date.now() / 1000) < wave.armed_until;
       document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected${{armed ? ' / ARMED' : ''}}`;
+      const waveThresholds = wave.thresholds || {{}};
+      document.getElementById('waveThresholds').textContent =
+        `amp≥${{waveThresholds.hand_amp_min_shoulder_widths || 0}} shoulder / sc≥${{waveThresholds.direction_changes_min || 0}} / dxdy≥${{waveThresholds.horizontal_vertical_ratio_min || 0}} / kp≥${{waveThresholds.keypoint_confidence_min || 0}}`;
+      document.getElementById('waveSampler').textContent =
+        `${{(wave.sample_hz || 0).toFixed(1)}} Hz / last ${{wave.last_sample_at ? new Date(wave.last_sample_at * 1000).toLocaleTimeString() : 'none'}}`;
       document.getElementById('waveEvent').textContent = waveEvent
         ? `${{waveEvent.reason}} / ${{waveEvent.target_id || 'no target'}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
         : `${{waveDetector.reason || 'none'}} / ${{waveDetector.target_id || 'no target'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
@@ -1777,7 +1819,7 @@ def main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         print("\nStopping PLUTO web shell")
     finally:
-        context.stop_stm32_link()
+        context.stop()
         server.server_close()
     return 0
 

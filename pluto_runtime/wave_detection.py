@@ -67,6 +67,7 @@ class WaveStatus:
     pose_ready: bool = False
     pose_score: float = 0.0
     pose_backend: str = "unknown"
+    thresholds: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,6 +110,21 @@ class SimpleWaveDetector:
         self.locked_track_id: int | None = None
         self.status = WaveStatus()
 
+    def thresholds(self) -> dict[str, Any]:
+        return {
+            "source": "desktop_wave_detection_reference",
+            "min_samples": self.min_samples,
+            "window_s": self.window_s,
+            "wrist_above_shoulder": True,
+            "hand_amp_min_shoulder_widths": self.pose_amp_thresh,
+            "direction_changes_min": self.pose_sign_changes_min,
+            "horizontal_vertical_ratio_min": self.pose_dxdy_ratio,
+            "keypoint_confidence_min": self.pose_min_confidence,
+            "confirm_streak_min": self.confirm_k,
+            "cooldown_s": self.cooldown_s,
+            "sampling": "background_camera_frames",
+        }
+
     def update(self, camera_status: dict[str, Any], now: float | None = None) -> WaveStatus:
         now = time.monotonic() if now is None else now
         detections = [item for item in (camera_status.get("detections") or []) if isinstance(item, dict) and item.get("bbox")]
@@ -126,6 +142,7 @@ class SimpleWaveDetector:
                 locked_track_id=self.locked_track_id,
                 last_confirmed_at=self._latest_confirmed_at(),
                 pose_backend=self._pose_backend(camera_status),
+                thresholds=self.thresholds(),
             )
             return self.status
 
@@ -180,6 +197,7 @@ class SimpleWaveDetector:
         status.visible_track_ids = sorted(active_ids)
         status.locked_track_id = self.locked_track_id
         status.pose_backend = self._pose_backend(camera_status)
+        status.thresholds = self.thresholds()
         self.status = status
         return status
 
