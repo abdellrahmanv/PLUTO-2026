@@ -98,6 +98,8 @@ class ManualRuntime:
 class WaveTriggerRuntime:
     enabled: bool = True
     detector_status: str = "tracked_pc_rule_lite"
+    armed_until: float = 0.0
+    armed_source: str | None = None
     trigger_count: int = 0
     rejected_count: int = 0
     last_event: dict[str, Any] | None = None
@@ -353,7 +355,7 @@ class PlutoWebContext:
         payload["stop_guard"] = stop_result
         return payload
 
-    def welcome_wave_trigger(self, source: str = "website_wave_test", diagnostic: bool = False) -> dict[str, Any]:
+    def welcome_wave_trigger(self, source: str = "website_wave_test", diagnostic: bool = False, arm: bool = False) -> dict[str, Any]:
         camera = status_to_dict(self.camera_service.get_status())
         wave_detector = self.update_wave_detector(camera)
         pending_confirmed = time.time() <= self.wave.pending_confirmed_until and bool(self.wave.last_confirmed_detector)
@@ -378,6 +380,21 @@ class PlutoWebContext:
             "mode_substate": self.mode_manager.current_substate,
         }
         self.wave.last_event = event
+
+        if arm and not wave_detector.get("confirmed", False):
+            self.wave.armed_until = time.time() + 12.0
+            self.wave.armed_source = source
+            self.wave.last_reason = "armed: waiting for real wave"
+            payload = {
+                "accepted": False,
+                "armed": True,
+                "reason": self.wave.last_reason,
+                "event": event,
+                "wave": self.wave_status(),
+            }
+            self.wave.last_result = payload
+            self.log("info", "WELCOME wave test armed; waiting for confirmed wave")
+            return payload
 
         if not self.wave.enabled:
             self.wave.rejected_count += 1
@@ -746,8 +763,11 @@ class PlutoWebContext:
         detector = self.update_wave_detector()
         if not detector.get("confirmed", False):
             return
-        result = self.welcome_wave_trigger(source="camera_wave", diagnostic=False)
+        source = self.wave.armed_source if time.time() <= self.wave.armed_until and self.wave.armed_source else "camera_wave"
+        result = self.welcome_wave_trigger(source=source, diagnostic=False)
         if result.get("accepted"):
+            self.wave.armed_until = 0.0
+            self.wave.armed_source = None
             self.log("pass", "IDLE real wave detected; WELCOME requested")
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
@@ -1166,7 +1186,7 @@ def html_page() -> str:
         <div class="actions" style="margin-top: 12px;">
           <button id="resetError">Reset To IDLE</button>
           <button id="injectFault">Inject Test Fault</button>
-          <button id="waveTrigger">Test Wave Trigger</button>
+          <button id="waveTrigger">Arm Wave Test</button>
         </div>
         <div id="stateReasons" style="margin-top: 12px;"></div>
       </section>
@@ -1305,7 +1325,8 @@ def html_page() -> str:
       const waveDetector = wave.detector || {{}};
       document.getElementById('waveDetector').textContent = `${{wave.enabled ? 'enabled' : 'disabled'}} / ${{wave.detector_status || 'unknown'}}`;
       document.getElementById('waveReason').textContent = wave.last_reason || 'none';
-      document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected`;
+      const armed = wave.armed_until && (Date.now() / 1000) < wave.armed_until;
+      document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected${{armed ? ' / ARMED' : ''}}`;
       document.getElementById('waveEvent').textContent = waveEvent
         ? `${{waveEvent.reason}} / ${{waveEvent.target_id || 'no target'}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
         : `${{waveDetector.reason || 'none'}} / ${{waveDetector.target_id || 'no target'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
@@ -1383,7 +1404,7 @@ def html_page() -> str:
       await api('/api/welcome/wave-trigger', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{source: 'website_wave_test', diagnostic: true}})
+        body: JSON.stringify({{source: 'website_wave_test', arm: true}})
       }});
       await refresh();
     }});
@@ -1609,6 +1630,7 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                     self.context.welcome_wave_trigger(
                         source=str(body.get("source", "website_wave_test")),
                         diagnostic=bool(body.get("diagnostic", False)),
+                        arm=bool(body.get("arm", False)),
                     ),
                 )
                 return

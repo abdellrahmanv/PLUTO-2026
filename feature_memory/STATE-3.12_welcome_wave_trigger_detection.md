@@ -167,6 +167,11 @@ box in red with `WAVE LOCK` and suppresses other visible person boxes. This
 matches the intended desktop behavior: Pluto can see multiple people, but once
 one person waves, that person becomes the interaction target.
 
+The website control is not a bypass. `Arm Wave Test` opens a short waiting
+window and records that the operator is testing the WELCOME wave path. It does
+not force WELCOME, does not create a fake confirmed wave, and does not set a red
+lock. Only the detector's confirmed per-track wave evidence can lock the target.
+
 5. Let the mode manager accept or reject the event.
 
 Implemented module:
@@ -323,3 +328,4 @@ WELCOME.
 | 2026-05-27 | Ported PC wave rules into Pi-friendly detector | Keep raised/oscillating-hand behavior without YOLOv5, SORT, or MediaPipe runtime |
 | 2026-05-29 | Replaced frame-diff hand estimate with optical flow | Preserve motion direction while staying light enough for Raspberry Pi |
 | 2026-05-29 | Added lightweight multi-person tracking and red lock overlay | Match desktop behavior: choose one waving target and suppress other boxes |
+| 2026-05-29 | Changed website wave test into an arm/wait control | Prevent fake locks before a real wave is detected |

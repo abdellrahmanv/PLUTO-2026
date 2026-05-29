@@ -72,6 +72,14 @@ def run_checks(base: str, hardware_flow: bool) -> None:
     if status["current_state"] == "ERROR":
         request(base, "/api/reset-error", "POST")
 
+    arm_code, arm_raw = request(base, "/api/welcome/wave-trigger", "POST", {"source": "smoke_arm_wave", "arm": True})
+    assert arm_code == 200, arm_code
+    arm = json.loads(arm_raw.decode("utf-8"))
+    if not arm.get("accepted"):
+        assert arm.get("armed") is True, arm
+        assert arm["event"]["diagnostic"] is False, arm
+        assert arm["event"]["source"] == "smoke_arm_wave", arm
+
     wave_code, wave_raw = request(base, "/api/welcome/wave-trigger", "POST", {"source": "smoke_test_wave", "diagnostic": True})
     assert wave_code == 200, wave_code
     wave = json.loads(wave_raw.decode("utf-8"))
