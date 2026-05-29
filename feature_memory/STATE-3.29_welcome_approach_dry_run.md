@@ -16,6 +16,8 @@ STOP commands.
 - STATE-3.29.9: expose approach evidence on the website.
 - STATE-3.29.10: propose STOP on missing target, degraded vision, arrival, or blocked path.
 - STATE-3.29.11: keep STOP guard active while evaluating approach.
+- STATE-3.29.12: do not estimate greeting distance from top/bottom-clipped boxes.
+- STATE-3.29.13: expose clipping evidence for debugging.
 
 ## Design
 
@@ -33,12 +35,18 @@ The planner chooses one target by locked wave track ID. If that target is not in
 the current detections, the output stays STOP with `locked target not visible`.
 This prevents the two-person failure where the red lock jumps to another human.
 
-Distance is estimated by bounding-box height ratio until true range fusion is
-added:
+Distance is estimated by bounding-box height ratio only when the target box is
+not clipped by the top or bottom of the camera frame. A clipped vertical box is
+not a full-body measurement, so Phase 10 reports `unknown_clipped` and proposes
+STOP instead of pretending the person is at greeting distance.
+
+Unclipped distance classes:
 
 - `far`: target box height below greeting threshold.
 - `good`: greeting distance reached.
 - `too_close`: target is too near.
+- `unknown_clipped`: target touches top or bottom frame edge; distance cannot
+  be trusted.
 
 Obstacle telemetry uses STM32 `OBS` values:
 
@@ -64,11 +72,14 @@ The website exposes the dry-run result in the `Welcome Approach` panel and
 1. Open `/api/status` and confirm `welcome_approach.dry_run` is `true`.
 2. Confirm `current_state` is `WELCOME` after a real wave.
 3. Confirm `welcome_approach.target_id` matches the red wave-locked box.
-4. If proposal is STOP, inspect `welcome_approach.reason`.
-5. If reason is `locked target not visible`, check camera lock and lighting.
-6. If reason is `vision quality degraded`, improve lighting before testing.
-7. If reason is `obstacle blocked`, inspect STM32 `OBS:F/FL/FR`.
-8. Confirm `stm32_runtime.drive_count` does not increase during approach dry-run.
+4. Check `welcome_approach.target_box_clipped` and `target_edge_contact`.
+5. If proposal is STOP, inspect `welcome_approach.reason`.
+6. If reason is `target distance uncertain`, move the camera/person so the full
+   body is visible or wait for future range fusion.
+7. If reason is `locked target not visible`, check camera lock and lighting.
+8. If reason is `vision quality degraded`, improve lighting before testing.
+9. If reason is `obstacle blocked`, inspect STM32 `OBS:F/FL/FR`.
+10. Confirm `stm32_runtime.drive_count` does not increase during approach dry-run.
 
 ## Verification
 

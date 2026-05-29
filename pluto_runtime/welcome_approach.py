@@ -21,8 +21,9 @@ class ApproachConfig:
     center_deadband_norm: float = 0.12
     turn_deadband_norm: float = 0.25
     target_lost_timeout_s: float = 2.0
-    greeting_height_ratio_min: float = 0.32
-    too_close_height_ratio_min: float = 0.55
+    greeting_height_ratio_min: float = 0.60
+    too_close_height_ratio_min: float = 0.82
+    vertical_clip_margin_px: int = 3
     front_stop_cm: float = 60.0
     side_stop_cm: float = 50.0
     front_slow_cm: float = 80.0
@@ -39,6 +40,8 @@ class ApproachStatus:
     substate: str = "UNKNOWN"
     target_id: int | None = None
     target_bbox: list[int] | None = None
+    target_box_clipped: bool = False
+    target_edge_contact: list[str] = field(default_factory=list)
     target_center_norm: float | None = None
     target_box_height_ratio: float | None = None
     target_distance_class: str = "unknown"
@@ -104,9 +107,11 @@ class WelcomeApproachPlanner:
         bbox = [int(value) for value in target.get("bbox", [])[:4]]
         status.target_id = target_id
         status.target_bbox = bbox
+        status.target_edge_contact = self._edge_contact(bbox, width, height)
+        status.target_box_clipped = any(edge in {"top", "bottom"} for edge in status.target_edge_contact)
         status.target_center_norm = self._center_norm(bbox, width)
         status.target_box_height_ratio = self._height_ratio(bbox, height)
-        status.target_distance_class = self._distance_class(status.target_box_height_ratio)
+        status.target_distance_class = self._distance_class(status.target_box_height_ratio, status.target_box_clipped)
         status.steering_intent = self._steering_intent(status.target_center_norm)
 
         if self._vision_blocks(camera_status):
@@ -124,6 +129,9 @@ class WelcomeApproachPlanner:
             return status
         if status.target_distance_class == "good":
             status.reason = "greeting distance reached"
+            return status
+        if status.target_distance_class in {"unknown", "unknown_clipped"}:
+            status.reason = "target distance uncertain"
             return status
 
         speed = self.config.max_forward_speed
@@ -203,7 +211,9 @@ class WelcomeApproachPlanner:
     def _height_ratio(bbox: list[int], height: float) -> float:
         return max(0.0, min(1.0, (float(bbox[3]) - float(bbox[1])) / height))
 
-    def _distance_class(self, height_ratio: float | None) -> str:
+    def _distance_class(self, height_ratio: float | None, box_clipped: bool) -> str:
+        if box_clipped:
+            return "unknown_clipped"
         if height_ratio is None:
             return "unknown"
         if height_ratio >= self.config.too_close_height_ratio_min:
@@ -211,6 +221,19 @@ class WelcomeApproachPlanner:
         if height_ratio >= self.config.greeting_height_ratio_min:
             return "good"
         return "far"
+
+    def _edge_contact(self, bbox: list[int], width: float, height: float) -> list[str]:
+        margin = float(self.config.vertical_clip_margin_px)
+        edges: list[str] = []
+        if float(bbox[0]) <= margin:
+            edges.append("left")
+        if float(bbox[1]) <= margin:
+            edges.append("top")
+        if float(bbox[2]) >= width - 1.0 - margin:
+            edges.append("right")
+        if float(bbox[3]) >= height - 1.0 - margin:
+            edges.append("bottom")
+        return edges
 
     def _steering_intent(self, center_norm: float | None) -> str:
         if center_norm is None:

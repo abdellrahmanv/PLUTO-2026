@@ -75,14 +75,21 @@ def main() -> int:
     assert right.proposed_motion == "turn_right"
     assert right.proposed_steer > 0
 
-    arrived = compute(camera([90, 40, 230, 185]))
+    arrived = compute(camera([90, 35, 230, 235]))
     assert arrived.proposed_motion == "stop"
     assert arrived.target_distance_class == "good"
     assert arrived.reason == "greeting distance reached"
 
-    too_close = compute(camera([70, 20, 250, 260]))
+    too_close = compute(camera([70, 20, 250, 285]))
     assert too_close.proposed_motion == "stop"
     assert too_close.target_distance_class == "too_close"
+
+    clipped = compute(camera([7, 150, 259, 319]))
+    assert clipped.proposed_motion == "stop"
+    assert clipped.target_distance_class == "unknown_clipped"
+    assert clipped.target_box_clipped is True
+    assert "bottom" in clipped.target_edge_contact
+    assert clipped.reason == "target distance uncertain"
 
     blocked = compute(camera([120, 80, 200, 170]), stm32_runtime=stm32(front=55))
     assert blocked.proposed_motion == "stop"

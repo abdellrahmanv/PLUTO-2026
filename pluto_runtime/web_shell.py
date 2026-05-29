@@ -1486,7 +1486,7 @@ def html_page() -> str:
       document.getElementById('approachTarget').textContent =
         approach.target_id == null ? 'none' : `track ${{approach.target_id}} / center ${{center}}`;
       document.getElementById('approachDistance').textContent =
-        `${{approach.target_distance_class || 'unknown'}} / h ${{height}}`;
+        `${{approach.target_distance_class || 'unknown'}} / h ${{height}}${{approach.target_box_clipped ? ' / clipped ' + (approach.target_edge_contact || []).join(',') : ''}}`;
       document.getElementById('approachSteering').textContent =
         `${{approach.steering_intent || 'unknown'}} / steer ${{approach.proposed_steer || 0}}`;
       document.getElementById('approachObstacles').textContent = approach.obstacle_status || 'unknown';

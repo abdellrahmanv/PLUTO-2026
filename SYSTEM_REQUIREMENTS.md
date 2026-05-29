@@ -783,6 +783,8 @@ WELCOME_DONE
 | STATE-3.29.9 | WELCOME_APPROACH dry-run shall expose target ID, distance class, steering intent, obstacle status, proposed motion, and reason on the website. | Pi | Website status review |
 | STATE-3.29.10 | WELCOME_APPROACH dry-run shall propose STOP when the target is missing, vision is degraded, greeting distance is reached, or obstacle telemetry blocks the path. | Pi | Planner smoke test |
 | STATE-3.29.11 | WELCOME_APPROACH dry-run shall keep a STOP guard active while WELCOME_APPROACH is evaluated. | Pi + STM32 | STOP guard log |
+| STATE-3.29.12 | WELCOME_APPROACH shall not classify greeting distance from a person box clipped by the top or bottom of the camera frame. | Pi | Clipped-box smoke test |
+| STATE-3.29.13 | WELCOME_APPROACH shall expose box clipping evidence so distance-estimation errors can be debugged. | Pi | Website/status review |
 
 ### Arrival And Talk Requirements
 
