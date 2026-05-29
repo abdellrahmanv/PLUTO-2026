@@ -777,6 +777,12 @@ WELCOME_DONE
 | STATE-3.29.3 | WELCOME_APPROACH shall use optimized vision perception when available to slow or stop before reaching humans or obstacles. | Pi | Vision safety test |
 | STATE-3.29.4 | WELCOME vision safety should use threaded capture, low resolution, frame skipping, detection hold, and tracked boxes to keep latency bounded. | Pi | CPU/FPS log |
 | STATE-3.29.5 | If vision and ultrasonic obstacle estimates disagree, Pi shall choose the safer slower command until confidence recovers. | Pi + STM32 | Sensor disagreement test |
+| STATE-3.29.6 | Phase 10 WELCOME_APPROACH shall run in dry-run mode until target, obstacle, STOP guard, and proposed-motion evidence are reviewed. | Pi | Dry-run smoke test |
+| STATE-3.29.7 | Phase 10 WELCOME_APPROACH shall not send `CMD:DRIVE`; it may only send `CMD:STOP` as a guard while computing proposed motion. | Pi + STM32 | Serial command log |
+| STATE-3.29.8 | WELCOME_APPROACH dry-run shall use the locked wave target ID and shall not retarget to another person without a new confirmed wave. | Pi | Two-person dry-run test |
+| STATE-3.29.9 | WELCOME_APPROACH dry-run shall expose target ID, distance class, steering intent, obstacle status, proposed motion, and reason on the website. | Pi | Website status review |
+| STATE-3.29.10 | WELCOME_APPROACH dry-run shall propose STOP when the target is missing, vision is degraded, greeting distance is reached, or obstacle telemetry blocks the path. | Pi | Planner smoke test |
+| STATE-3.29.11 | WELCOME_APPROACH dry-run shall keep a STOP guard active while WELCOME_APPROACH is evaluated. | Pi + STM32 | STOP guard log |
 
 ### Arrival And Talk Requirements
 

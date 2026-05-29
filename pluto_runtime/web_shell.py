@@ -30,6 +30,7 @@ from .camera import CameraService, status_to_dict
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 from .wave_detection import SimpleWaveDetector
+from .welcome_approach import ApproachStatus, WelcomeApproachPlanner
 from .welcome_talk import TalkResult, WelcomeTalkEngine
 
 
@@ -74,6 +75,7 @@ class PlutoStatus:
     error: dict[str, Any] = field(default_factory=dict)
     manual: dict[str, Any] = field(default_factory=dict)
     wave: dict[str, Any] = field(default_factory=dict)
+    welcome_approach: dict[str, Any] = field(default_factory=dict)
     talk: dict[str, Any] = field(default_factory=dict)
     audio: dict[str, Any] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
@@ -144,6 +146,9 @@ class PlutoWebContext:
         self.wave.thresholds = self.wave_detector.thresholds()
         self.wave_thread_running = True
         self.wave_thread: threading.Thread | None = None
+        self.approach_planner = WelcomeApproachPlanner()
+        self.approach_status = ApproachStatus()
+        self.approach_last_stop_at = 0.0
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -269,6 +274,7 @@ class PlutoWebContext:
                     "Camera feed uses threaded capture, frame skipping, MJPG, low resolution, and warmup suppression.",
                     "WELCOME wave uses quantized MoveNet pose when available; pixel motion is debug-only.",
                     "WELCOME_TALK v1 can use website text, camera microphone STT, and local Piper TTS when available.",
+                    "WELCOME_APPROACH Phase 10 is dry-run only: it computes target, safety, and proposed motion while holding STOP.",
                 ],
             }
             if stm32.connected:
@@ -792,6 +798,9 @@ class PlutoWebContext:
             self.escalate_critical_alert_if_needed(stm32_runtime)
             self.process_idle_wave_trigger()
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
+            camera_status = status_to_dict(self.camera_service.get_status())
+            welcome_approach = self.update_welcome_approach(mode_snapshot, camera_status, stm32_runtime)
+            mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             status = PlutoStatus(
                 current_state=mode_snapshot["current_state"],
                 current_substate=mode_snapshot["current_substate"],
@@ -801,12 +810,13 @@ class PlutoWebContext:
                 hardware=hardware,
                 allowed_next_states=mode_snapshot["allowed_next_states"],
                 bootstrap_report=self.bootstrap_report,
-                camera=status_to_dict(self.camera_service.get_status()),
+                camera=camera_status,
                 mode_manager=mode_snapshot,
                 stm32_runtime=stm32_runtime,
                 error=self.error_status(mode_snapshot, stm32_runtime),
                 manual=asdict(self.manual),
                 wave=self.wave_status(),
+                welcome_approach=welcome_approach,
                 talk=self.talk_status(),
                 audio=self.audio_status(),
                 events=events,
@@ -823,6 +833,57 @@ class PlutoWebContext:
 
     def wave_status(self) -> dict[str, Any]:
         return asdict(self.wave)
+
+    def update_welcome_approach(
+        self,
+        mode_snapshot: dict[str, Any] | None = None,
+        camera_status: dict[str, Any] | None = None,
+        stm32_runtime: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        mode_snapshot = mode_snapshot or self.mode_manager.snapshot(self.safety_context(operator_request=True))
+        camera_status = camera_status or status_to_dict(self.camera_service.get_status())
+        stm32_runtime = stm32_runtime or (stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {})
+
+        status = self.approach_planner.compute(
+            camera_status=camera_status,
+            stm32_runtime=stm32_runtime,
+            wave_status=self.wave_status(),
+            current_state=str(mode_snapshot.get("current_state", "UNKNOWN")),
+            current_substate=str(mode_snapshot.get("current_substate", "UNKNOWN")),
+        )
+
+        if (
+            status.active
+            and status.target_id is not None
+            and self.mode_manager.current_state == "WELCOME"
+            and self.mode_manager.current_substate == "WELCOME_DETECT"
+        ):
+            self.mode_manager.set_substate("WELCOME_APPROACH_DRY_RUN", return_lock=False)
+            status.substate = self.mode_manager.current_substate
+
+        if status.active:
+            now = time.monotonic()
+            if now - self.approach_last_stop_at >= 1.0:
+                stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+                status.stop_guard = self.degraded_stop_guard_if_safe(stop)
+                self.approach_last_stop_at = now
+                if self.hardware["stm32"].connected and not status.stop_guard.get("ok"):
+                    transition = self.mode_manager.enter_error(
+                        "Unable to verify stopped wheels during WELCOME_APPROACH dry-run",
+                        source="welcome_approach",
+                    )
+                    status.active = False
+                    status.proposed_motion = "stop"
+                    status.proposed_speed = 0
+                    status.proposed_steer = 0
+                    status.reason = "stop guard failed"
+                    status.stop_guard["transition"] = transition.to_dict()
+                    self.log("error", f"WELCOME_APPROACH dry-run stop guard failed: {status.stop_guard.get('detail')}")
+            elif not status.stop_guard:
+                status.stop_guard = {"ok": True, "detail": "recent STOP guard still valid", "degraded": False}
+
+        self.approach_status = status
+        return status.to_dict()
 
     def process_idle_wave_trigger(self) -> None:
         if self.mode_manager.current_state != "IDLE" or not self.wave.enabled:
@@ -1282,6 +1343,17 @@ def html_page() -> str:
         <div class="metric"><span class="label">Last Event</span><span class="value" id="waveEvent">none</span></div>
       </section>
       <section class="span-6">
+        <h2>Welcome Approach</h2>
+        <div class="metric"><span class="label">Mode</span><span class="value" id="approachMode">dry-run</span></div>
+        <div class="metric"><span class="label">Target</span><span class="value" id="approachTarget">none</span></div>
+        <div class="metric"><span class="label">Distance</span><span class="value" id="approachDistance">unknown</span></div>
+        <div class="metric"><span class="label">Steering</span><span class="value" id="approachSteering">unknown</span></div>
+        <div class="metric"><span class="label">Obstacles</span><span class="value" id="approachObstacles">unknown</span></div>
+        <div class="metric"><span class="label">Proposal</span><span class="value" id="approachProposal">stop</span></div>
+        <div class="metric"><span class="label">Reason</span><span class="value" id="approachReason">not evaluated</span></div>
+        <div class="metric"><span class="label">STOP Guard</span><span class="value" id="approachStop">none</span></div>
+      </section>
+      <section class="span-6">
         <h2>Manual Control</h2>
         <div class="metric"><span class="label">Enabled</span><span class="value" id="manualEnabled">false</span></div>
         <div class="metric"><span class="label">Intent</span><span class="value" id="manualIntent">0,0</span></div>
@@ -1405,6 +1477,24 @@ def html_page() -> str:
       document.getElementById('waveEvent').textContent = waveEvent
         ? `${{waveEvent.reason}} / ${{waveEvent.target_id || 'no target'}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
         : `${{waveDetector.reason || 'none'}} / ${{waveDetector.target_id || 'no target'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
+      const approach = data.welcome_approach || {{}};
+      const stopGuard = approach.stop_guard || {{}};
+      const center = approach.target_center_norm == null ? 'unknown' : approach.target_center_norm.toFixed(2);
+      const height = approach.target_box_height_ratio == null ? 'unknown' : approach.target_box_height_ratio.toFixed(2);
+      document.getElementById('approachMode').textContent =
+        `${{approach.active ? 'active' : 'inactive'}} / ${{approach.dry_run ? 'dry-run' : 'live'}}`;
+      document.getElementById('approachTarget').textContent =
+        approach.target_id == null ? 'none' : `track ${{approach.target_id}} / center ${{center}}`;
+      document.getElementById('approachDistance').textContent =
+        `${{approach.target_distance_class || 'unknown'}} / h ${{height}}`;
+      document.getElementById('approachSteering').textContent =
+        `${{approach.steering_intent || 'unknown'}} / steer ${{approach.proposed_steer || 0}}`;
+      document.getElementById('approachObstacles').textContent = approach.obstacle_status || 'unknown';
+      document.getElementById('approachProposal').textContent =
+        `${{approach.proposed_motion || 'stop'}} / speed ${{approach.proposed_speed || 0}}`;
+      document.getElementById('approachReason').textContent = approach.reason || 'not evaluated';
+      document.getElementById('approachStop').textContent =
+        stopGuard.detail ? `${{stopGuard.ok ? 'ok' : 'fail'}} / ${{stopGuard.detail}}` : 'none';
       const manual = data.manual || {{}};
       document.getElementById('manualEnabled').textContent = manual.enabled ? 'true' : 'false';
       document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;

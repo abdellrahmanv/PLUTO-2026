@@ -183,3 +183,24 @@ Useful endpoint:
 
 The v1 detector uses existing camera human boxes. It does not load MediaPipe or
 PyTorch and it never sends motor commands directly.
+
+## Phase 10 - WELCOME_APPROACH Dry Run
+
+Run the planner smoke test:
+
+```bash
+python3 tools/welcome_approach_smoke.py
+```
+
+With the Pi website open, trigger WELCOME with a real wave and review the
+`Welcome Approach` panel. Phase 10 computes target lock, center offset,
+distance class, obstacle status, and proposed motion, but it is dry-run only.
+
+Expected evidence:
+
+```text
+WELCOME_APPROACH_SMOKE PASS
+welcome_approach.dry_run = true
+No CMD:DRIVE is sent by WELCOME_APPROACH
+STOP guard remains active while approach is evaluated
+```
