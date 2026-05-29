@@ -382,6 +382,10 @@ class PlutoWebContext:
         self.wave.last_event = event
 
         if arm and not wave_detector.get("confirmed", False):
+            self.wave_detector.reset()
+            self.camera_service.clear_wave_lock()
+            self.wave.pending_confirmed_until = 0.0
+            self.wave.last_confirmed_detector = {}
             self.wave.armed_until = time.time() + 12.0
             self.wave.armed_source = source
             self.wave.last_reason = "armed: waiting for real wave"

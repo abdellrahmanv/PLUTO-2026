@@ -113,12 +113,11 @@ def run_detector_checks() -> None:
             now=float(index) * 0.2,
         )
     assert status.confirmed is False
-    assert status.reason in {"not_enough_direction_changes", "amplitude_too_low"}
+    assert status.reason in {"not_enough_direction_changes", "amplitude_too_low", "hand_not_raised"}
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     centers = [150, 175, 136, 180, 132, 176, 134, 178]
     widths = [100, 116, 96, 118, 94, 116, 96, 118]
-    confirmed_status = None
     for index, (center, width) in enumerate(zip(centers, widths)):
         status = detector.update(
             {
@@ -127,15 +126,11 @@ def run_detector_checks() -> None:
             },
             now=float(index) * 0.2,
         )
-        if status.confirmed and status.reason == "confirmed_wave":
-            confirmed_status = status
-    assert confirmed_status is not None, status
-    assert confirmed_status.reason == "confirmed_wave", confirmed_status
-    assert confirmed_status.direction_changes >= 2, confirmed_status
+    assert status.confirmed is False, status
+    assert status.reason in {"hand_not_raised", "amplitude_too_low"}, status
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     balances = [-0.7, 0.6, -0.65, 0.7, -0.6, 0.65, -0.7, 0.6]
-    confirmed_status = None
     for index, balance in enumerate(balances):
         status = detector.update(
             {
@@ -145,11 +140,28 @@ def run_detector_checks() -> None:
             },
             now=float(index) * 0.2,
         )
-        if status.confirmed and status.reason == "confirmed_wave":
-            confirmed_status = status
-    assert confirmed_status is not None, status
-    assert confirmed_status.reason == "confirmed_wave", confirmed_status
-    assert confirmed_status.motion_direction_changes >= 2, confirmed_status
+    assert status.confirmed is False, status
+    assert status.reason in {"hand_not_raised", "hand_amplitude_too_low"}, status
+
+    detector = SimpleWaveDetector(cooldown_s=0.5)
+    for index, hand_x in enumerate([0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32]):
+        status = detector.update(
+            {
+                **base,
+                "detections": [{"bbox": [90, 45, 230, 285], "confidence": 0.87}],
+                "wave_motion": {
+                    "motion_norm": 0.030,
+                    "balance": 0.5,
+                    "hand_valid": True,
+                    "hand_x_norm": hand_x,
+                    "hand_y_norm": 0.35,
+                    "raised_region": True,
+                },
+            },
+            now=float(index) * 0.2,
+        )
+    assert status.confirmed is False, status
+    assert status.reason in {"not_enough_direction_changes", "hand_amplitude_too_low"}, status
 
     detector = SimpleWaveDetector(cooldown_s=0.5)
     hand_positions = [-0.45, 0.30, -0.38, 0.34, -0.42, 0.36, -0.40]

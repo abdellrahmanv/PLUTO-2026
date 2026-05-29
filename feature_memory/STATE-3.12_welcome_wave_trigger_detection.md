@@ -148,7 +148,9 @@ Implemented v1 path:
 5. Apply the desktop prototype's rules without loading its heavy stack:
    raised region, horizontal hand amplitude, x direction changes,
    horizontal-dominates-vertical ratio, confirmation streak, and cooldown.
-6. Fall back to broad box/pixel motion if hand candidate evidence is imperfect.
+6. Reject broad box motion and generic optical-flow motion unless the tracked
+   hand-wave rule confirms. These broad motion signals are debug evidence only,
+   not lock evidence.
 7. Publish a structured event:
 
 ```text
@@ -171,6 +173,13 @@ The website control is not a bypass. `Arm Wave Test` opens a short waiting
 window and records that the operator is testing the WELCOME wave path. It does
 not force WELCOME, does not create a fake confirmed wave, and does not set a red
 lock. Only the detector's confirmed per-track wave evidence can lock the target.
+
+False-positive fix: broad human-box movement and generic optical-flow movement
+must not confirm WELCOME by themselves. Earlier versions allowed these fallback
+paths to confirm a wave, which could select a person after arming even when they
+did not wave. The current rule is stricter: lock requires a tracked raised-hand
+candidate with enough horizontal amplitude, direction changes, and horizontal
+dominance.
 
 5. Let the mode manager accept or reject the event.
 
@@ -329,3 +338,4 @@ WELCOME.
 | 2026-05-29 | Replaced frame-diff hand estimate with optical flow | Preserve motion direction while staying light enough for Raspberry Pi |
 | 2026-05-29 | Added lightweight multi-person tracking and red lock overlay | Match desktop behavior: choose one waving target and suppress other boxes |
 | 2026-05-29 | Changed website wave test into an arm/wait control | Prevent fake locks before a real wave is detected |
+| 2026-05-29 | Removed broad motion fallback as confirmation evidence | Prevent auto-selecting a person who did not wave |

@@ -180,6 +180,13 @@ class SimpleWaveDetector:
         self.status = status
         return status
 
+    def reset(self) -> None:
+        self.samples.clear()
+        self.confirm_streak.clear()
+        self.last_confirmed_at.clear()
+        self.locked_track_id = None
+        self.status = WaveStatus(reason="reset")
+
     def _evaluate_track(self, track_id: int, frame_width: float, now: float) -> WaveStatus:
         cooldown = self._cooldown_remaining(track_id, now)
         if cooldown > 0:
@@ -207,22 +214,18 @@ class SimpleWaveDetector:
             self.confirm_streak[track_id] = max(0, self.confirm_streak[track_id] - 1)
 
         pc_rule_wave = self.confirm_streak[track_id] >= self.confirm_k
-        box_wave = metrics["direction_changes"] >= self.min_direction_changes and (
-            metrics["amplitude_norm"] >= self.min_amplitude_norm or metrics["width_change_norm"] >= self.min_width_change_norm
-        )
-        pixel_wave = (
-            metrics["motion_direction_changes"] >= self.min_motion_direction_changes
-            and metrics["motion_norm"] >= self.min_motion_norm
-        )
-
-        if not pc_rule_wave and not box_wave and not pixel_wave:
-            if (
-                metrics["motion_norm"] < self.min_motion_norm
-                and metrics["amplitude_norm"] < self.min_amplitude_norm
-                and metrics["width_change_norm"] < self.min_width_change_norm
-            ):
+        if not pc_rule_wave:
+            if metrics["motion_norm"] < self.min_motion_norm:
                 return self._status(track_id, False, "amplitude_too_low", frame_width, now, cooldown)
-            return self._status(track_id, False, "not_enough_direction_changes", frame_width, now, cooldown)
+            if not metrics["raised"]:
+                return self._status(track_id, False, "hand_not_raised", frame_width, now, cooldown)
+            if metrics["hand_amp"] < self.hand_amp_thresh:
+                return self._status(track_id, False, "hand_amplitude_too_low", frame_width, now, cooldown)
+            if metrics["hand_sign_changes"] < self.min_direction_changes:
+                return self._status(track_id, False, "not_enough_direction_changes", frame_width, now, cooldown)
+            if metrics["hand_dx_dy"] < self.hand_dxdy_ratio:
+                return self._status(track_id, False, "horizontal_not_dominant", frame_width, now, cooldown)
+            return self._status(track_id, False, "not_confirmed_yet", frame_width, now, cooldown)
 
         score = min(
             1.0,
@@ -230,8 +233,6 @@ class SimpleWaveDetector:
                 metrics["hand_amp"] / self.hand_amp_thresh,
                 metrics["motion_norm"] / self.min_motion_norm,
                 self.confirm_streak[track_id] / self.confirm_k,
-                metrics["amplitude_norm"] / self.min_amplitude_norm,
-                metrics["width_change_norm"] / self.min_width_change_norm,
             )
             / 2.0,
         )

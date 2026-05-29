@@ -710,6 +710,11 @@ class CameraService:
             self.wave_lock_label = label
             self.wave_lock_track_id = track_id
 
+    def clear_wave_lock(self) -> None:
+        with self.lock:
+            self.wave_lock_until = 0.0
+            self.wave_lock_track_id = None
+
     def _draw_overlay(self, cv2, frame, detections: list[HumanDetection]) -> None:
         lock_active = time.monotonic() < self.wave_lock_until
         locked_det = None
