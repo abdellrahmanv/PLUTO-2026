@@ -55,6 +55,9 @@ class CameraStatus:
     pose_model_path: str | None = None
     pose_inference_ms: float = 0.0
     pose_inference_fps: float = 0.0
+    image_brightness: float = 0.0
+    image_contrast: float = 0.0
+    vision_quality: str = "unknown"
     error: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -486,6 +489,11 @@ class CameraService:
         self.wave_lock_track_id: int | None = None
         self.wave_lock_anchor_bbox: list[int] | None = None
         self.wave_lock_anchor_updated_at = 0.0
+        self.lock_match_min_iou = 0.12
+        self.lock_match_max_center_distance = 0.45
+        self.image_brightness = 0.0
+        self.image_contrast = 0.0
+        self.vision_quality = "unknown"
         self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
@@ -559,6 +567,7 @@ class CameraService:
                 continue
 
             frame_index += 1
+            self._update_image_quality(frame)
             if self.detector and frame_index % self.frame_skip == 0:
                 detections = self.detector.detect(frame)
                 if warmup_remaining > 0:
@@ -655,9 +664,39 @@ class CameraService:
             return None
 
         candidate = detections[best_index]
-        if bbox_iou(candidate.bbox, anchor) < 0.03 and normalized_center_distance(candidate.bbox, anchor) > 1.2:
+        if not self._lock_match_ok(candidate.bbox, anchor):
+            self.clear_wave_lock()
             return None
         return detections.pop(best_index)
+
+    def _lock_match_ok(self, bbox: list[int] | list[float], anchor: list[int] | list[float]) -> bool:
+        return (
+            bbox_iou(bbox, anchor) >= self.lock_match_min_iou
+            or normalized_center_distance(bbox, anchor) <= self.lock_match_max_center_distance
+        )
+
+    def _update_image_quality(self, frame) -> None:
+        try:
+            import numpy as np
+
+            gray = (
+                0.299 * frame[:, :, 0].astype(np.float32)
+                + 0.587 * frame[:, :, 1].astype(np.float32)
+                + 0.114 * frame[:, :, 2].astype(np.float32)
+            )
+            brightness = float(gray.mean())
+            contrast = float(gray.std())
+        except Exception:
+            return
+
+        self.image_brightness = brightness
+        self.image_contrast = contrast
+        if brightness < 35.0 or contrast < 18.0:
+            self.vision_quality = "low_light"
+        elif brightness < 55.0 or contrast < 24.0:
+            self.vision_quality = "dim"
+        else:
+            self.vision_quality = "ok"
 
     def _cleanup_tracks(self, now: float) -> None:
         stale = [track_id for track_id, item in self.tracks.items() if now - float(item.get("last_seen", 0.0)) > 2.0]
@@ -673,6 +712,18 @@ class CameraService:
         if not detections:
             self.previous_wave_rois.clear()
             return {"available": False, "reason": "no_person", "frame_index": frame_index, "timestamp": time.time()}
+
+        if self.vision_quality == "low_light":
+            return {
+                "available": False,
+                "reason": "low_light",
+                "candidates": [],
+                "flow_candidates": [],
+                "frame_index": frame_index,
+                "timestamp": time.time(),
+                "image_brightness": self.image_brightness,
+                "image_contrast": self.image_contrast,
+            }
 
         pose_candidates: list[dict[str, Any]] = []
         flow_candidates: list[dict[str, Any]] = []
@@ -719,6 +770,8 @@ class CameraService:
                 "locked_track_id": self.wave_lock_track_id if lock_active else None,
                 "frame_index": frame_index,
                 "timestamp": time.time(),
+                "image_brightness": self.image_brightness,
+                "image_contrast": self.image_contrast,
             }
 
         if not flow_candidates:
@@ -741,6 +794,8 @@ class CameraService:
             "locked_track_id": self.wave_lock_track_id if lock_active else None,
             "frame_index": frame_index,
             "timestamp": time.time(),
+            "image_brightness": self.image_brightness,
+            "image_contrast": self.image_contrast,
         }
 
     def _estimate_detection_pose_wave(self, frame, det: HumanDetection, frame_index: int) -> dict[str, Any]:
@@ -945,8 +1000,9 @@ class CameraService:
         if self.wave_lock_anchor_bbox is None:
             return None
         best = min(detections, key=lambda item: normalized_center_distance(item.bbox, self.wave_lock_anchor_bbox))
-        if normalized_center_distance(best.bbox, self.wave_lock_anchor_bbox) <= 1.2:
+        if self._lock_match_ok(best.bbox, self.wave_lock_anchor_bbox):
             return best
+        self.clear_wave_lock()
         return None
 
     def _draw_pose_keypoints(self, cv2, frame, keypoints: dict[str, Any]) -> None:
@@ -1005,6 +1061,9 @@ class CameraService:
             pose_model_path=self.pose_model_path,
             pose_inference_ms=float(pose_status.get("inference_ms") or 0.0),
             pose_inference_fps=float(pose_status.get("inference_fps") or 0.0),
+            image_brightness=self.image_brightness,
+            image_contrast=self.image_contrast,
+            vision_quality=self.vision_quality,
             error=error or self.error,
             details={
                 "video_devices": list_video_devices(),
@@ -1021,7 +1080,12 @@ class CameraService:
                 "wave_locked_track_id": self.wave_lock_track_id,
                 "wave_lock_anchor_bbox": self.wave_lock_anchor_bbox,
                 "wave_lock_anchor_age_s": time.monotonic() - self.wave_lock_anchor_updated_at if self.wave_lock_anchor_updated_at else None,
+                "wave_lock_match_min_iou": self.lock_match_min_iou,
+                "wave_lock_match_max_center_distance": self.lock_match_max_center_distance,
                 "active_track_ids": sorted(self.tracks.keys()),
+                "image_brightness": self.image_brightness,
+                "image_contrast": self.image_contrast,
+                "vision_quality": self.vision_quality,
                 "pose": pose_status,
             },
         )

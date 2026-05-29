@@ -291,6 +291,33 @@ def run_camera_lock_checks() -> None:
     assert locked.bbox == [172, 47, 312, 286], assigned
     assert camera.wave_lock_anchor_bbox == [172, 47, 312, 286], camera.wave_lock_anchor_bbox
 
+    camera.tracks = {
+        1: {"bbox": [18, 52, 124, 272], "last_seen": now + 0.1, "confidence": 0.80},
+        2: {"bbox": [172, 47, 312, 286], "last_seen": now + 0.1, "confidence": 0.89},
+    }
+    camera.wave_lock_track_id = 2
+    camera.wave_lock_until = now + 6.0
+    camera.wave_lock_anchor_bbox = [172, 47, 312, 286]
+    assigned = camera._assign_tracks(
+        [HumanDetection(bbox=[18, 52, 124, 272], confidence=0.80)],
+        now + 0.2,
+    )
+    assert all(item.track_id != 2 for item in assigned), assigned
+    assert camera.wave_lock_track_id is None, camera.wave_lock_track_id
+
+    camera.wave_lock_track_id = 2
+    camera.wave_lock_until = now + 7.0
+    camera.wave_lock_anchor_bbox = [172, 47, 312, 286]
+    assert camera._locked_detection_for_overlay([HumanDetection(bbox=[18, 52, 124, 272], confidence=0.80, track_id=1)]) is None
+    assert camera.wave_lock_track_id is None
+
+    camera.vision_quality = "low_light"
+    camera.image_brightness = 20.0
+    camera.image_contrast = 10.0
+    motion = camera._estimate_wave_motion(None, None, [HumanDetection(bbox=[10, 10, 100, 200], confidence=0.80, track_id=1)], 1)
+    assert motion["available"] is False, motion
+    assert motion["reason"] == "low_light", motion
+
 
 def main() -> int:
     args = parse_args()

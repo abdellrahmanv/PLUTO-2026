@@ -39,6 +39,8 @@ STATE-3.12.19
 STATE-3.12.20
 STATE-3.12.21
 STATE-3.12.22
+STATE-3.12.23
+STATE-3.12.24
 STATE-3.13
 STATE-3.15
 STATE-3.16
@@ -256,6 +258,27 @@ other people. The anchor is updated frame by frame as the locked person moves.
 This is not full face/person re-identification, but it prevents the common
 two-person red-box jump seen in field testing.
 
+The lock fails closed. If the confirmed waver leaves the camera and the only
+remaining box is not close enough to the stored anchor, the red lock is cleared
+instead of transferring to the other person. Active thresholds:
+
+```text
+anchor IoU >= 0.12 OR normalized center distance <= 0.45
+```
+
+Low-light behavior:
+
+The camera service measures frame brightness and contrast. If the image is too
+dark or flat, wave detection reports `low_light` and does not confirm new wave
+targets. This is safer than letting noisy pose landmarks select the wrong
+person. Active gates:
+
+```text
+low_light if brightness < 35 OR contrast < 18
+dim       if brightness < 55 OR contrast < 24
+ok        otherwise
+```
+
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
 link is alive, recent telemetry is available, wheel speed is zero, and manual
@@ -333,6 +356,8 @@ Website impact:
 | WELCOME-WAVE-007 | Refresh `/api/status` repeatedly on one frozen frame | Sample count does not advance as fake wave history |
 | WELCOME-WAVE-008 | Stop browser polling and wave in front of camera | Background sampler still detects and locks |
 | WELCOME-WAVE-009 | Two people visible after one person waves | Red box remains on the anchored waver track |
+| WELCOME-WAVE-010 | Waver leaves camera while another person remains | Red lock clears instead of jumping |
+| WELCOME-WAVE-011 | Low light scene | Wave detector reports low light and does not confirm |
 
 ## Debug Checklist
 
@@ -404,3 +429,4 @@ WELCOME.
 | 2026-05-29 | Added frame-index dedupe | Prevent website polling from creating fake gesture history |
 | 2026-05-29 | Added runtime wave sampler and threshold display | Match the desktop video-loop behavior and make field tuning visible |
 | 2026-05-29 | Added spatially sticky wave lock anchor | Keep red target focus on the person who actually waved when two people are visible |
+| 2026-05-29 | Added fail-closed lock clearing and low-light gate | Prevent red lock from moving to another person when the waver exits or vision is unreliable |
