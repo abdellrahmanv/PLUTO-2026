@@ -97,7 +97,7 @@ class ManualRuntime:
 @dataclass
 class WaveTriggerRuntime:
     enabled: bool = True
-    detector_status: str = "simple_box_motion"
+    detector_status: str = "tracked_pc_rule_lite"
     trigger_count: int = 0
     rejected_count: int = 0
     last_event: dict[str, Any] | None = None
@@ -362,13 +362,15 @@ class PlutoWebContext:
         human_count = int(camera.get("human_count") or 0)
         detections = camera.get("detections") or []
         target = detections[0] if detections else None
+        target_id = wave_detector.get("target_id") or (f"track_{target.get('track_id')}" if isinstance(target, dict) and target.get("track_id") is not None else None)
         event = {
             "type": "WELCOME_TRIGGER:WAVE",
             "source": source,
             "diagnostic": bool(diagnostic),
             "timestamp": time.time(),
             "human_count": human_count,
-            "target_id": "human_0" if target else None,
+            "target_id": target_id,
+            "track_id": wave_detector.get("track_id"),
             "confidence": float(wave_detector.get("confidence") or (1.0 if diagnostic else 0.0)),
             "score": float(wave_detector.get("score") or (1.0 if diagnostic else 0.0)),
             "side": wave_detector.get("side", "unknown"),
@@ -442,11 +444,15 @@ class PlutoWebContext:
         camera_status = camera_status or status_to_dict(self.camera_service.get_status())
         detector_status = self.wave_detector.update(camera_status).to_dict()
         self.wave.detector = detector_status
-        self.wave.detector_status = "simple_box_motion"
+        self.wave.detector_status = str(detector_status.get("algorithm") or "tracked_pc_rule_lite")
         if detector_status.get("confirmed"):
             self.wave.pending_confirmed_until = time.time() + 1.5
             self.wave.last_confirmed_detector = dict(detector_status)
-            self.camera_service.set_wave_lock(duration_s=4.0, label="WAVE LOCK")
+            self.camera_service.set_wave_lock(
+                duration_s=4.0,
+                label="WAVE LOCK",
+                track_id=detector_status.get("track_id"),
+            )
             self.wave.last_reason = f"detected wave: {detector_status.get('reason')}"
         elif self.wave.last_event is None:
             self.wave.last_reason = str(detector_status.get("reason", "not checked"))
@@ -1301,8 +1307,8 @@ def html_page() -> str:
       document.getElementById('waveReason').textContent = wave.last_reason || 'none';
       document.getElementById('waveCounts').textContent = `${{wave.trigger_count || 0}} accepted / ${{wave.rejected_count || 0}} rejected`;
       document.getElementById('waveEvent').textContent = waveEvent
-        ? `${{waveEvent.reason}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
-        : `${{waveDetector.reason || 'none'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
+        ? `${{waveEvent.reason}} / ${{waveEvent.target_id || 'no target'}} / score ${{(waveEvent.score || 0).toFixed(2)}}`
+        : `${{waveDetector.reason || 'none'}} / ${{waveDetector.target_id || 'no target'}} / raised ${{waveDetector.raised ? 'yes' : 'no'}} / amp ${{(waveDetector.hand_amp || 0).toFixed(2)}} / sc ${{waveDetector.hand_sign_changes || 0}} / dxdy ${{(waveDetector.hand_dx_dy || 0).toFixed(1)}}`;
       const manual = data.manual || {{}};
       document.getElementById('manualEnabled').textContent = manual.enabled ? 'true' : 'false';
       document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;

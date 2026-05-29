@@ -22,6 +22,7 @@ class HumanDetection:
     bbox: list[int]
     confidence: float
     class_name: str = "human"
+    track_id: int | None = None
 
 
 @dataclass
@@ -81,6 +82,30 @@ def v4l2_summary() -> str:
         return result.stdout.strip()
     except Exception:
         return ""
+
+
+def box_area(bbox: list[int] | list[float]) -> float:
+    x1, y1, x2, y2 = [float(value) for value in bbox]
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def bbox_iou(a: list[int] | list[float], b: list[int] | list[float]) -> float:
+    ax1, ay1, ax2, ay2 = [float(value) for value in a]
+    bx1, by1, bx2, by2 = [float(value) for value in b]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = box_area(a) + box_area(b) - inter
+    return inter / union if union > 1e-6 else 0.0
+
+
+def normalized_center_distance(a: list[int] | list[float], b: list[int] | list[float]) -> float:
+    ax1, ay1, ax2, ay2 = [float(value) for value in a]
+    bx1, by1, bx2, by2 = [float(value) for value in b]
+    acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+    bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+    scale = max(ax2 - ax1, ay2 - ay1, bx2 - bx1, by2 - by1, 1.0)
+    return (((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5) / scale
 
 
 class ThreadedCamera:
@@ -415,9 +440,12 @@ class CameraService:
         self.latest_jpeg: bytes | None = None
         self.latest_detections: list[HumanDetection] = []
         self.latest_wave_motion: dict[str, Any] = {"available": False, "reason": "not_started"}
-        self.previous_wave_roi = None
+        self.previous_wave_rois: dict[int, Any] = {}
+        self.tracks: dict[int, dict[str, Any]] = {}
+        self.next_track_id = 1
         self.wave_lock_until = 0.0
         self.wave_lock_label = "WAVE LOCK"
+        self.wave_lock_track_id: int | None = None
         self.last_positive_detection_time = 0.0
         self.status = CameraStatus(configured_resolution=[resolution[0], resolution[1]], frame_skip=self.frame_skip)
         self.stream_frame_count = 0
@@ -482,10 +510,12 @@ class CameraService:
                     detections = []
                     warmup_remaining -= 1
                 if detections:
+                    detections = self._assign_tracks(detections, time.monotonic())
                     self.latest_detections = detections
                     self.last_positive_detection_time = time.monotonic()
                 elif time.monotonic() - self.last_positive_detection_time > self.detection_hold_s:
                     self.latest_detections = []
+                    self._cleanup_tracks(time.monotonic())
 
             wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections)
 
@@ -504,12 +534,73 @@ class CameraService:
                     self.latest_wave_motion = wave_motion
                     self.status = self._build_status(available=True, running=True, warmup_remaining=warmup_remaining)
 
+    def _assign_tracks(self, detections: list[HumanDetection], now: float) -> list[HumanDetection]:
+        self._cleanup_tracks(now)
+        available_ids = set(self.tracks.keys())
+        assigned: list[HumanDetection] = []
+        for det in sorted(detections, key=lambda item: box_area(item.bbox), reverse=True):
+            best_id: int | None = None
+            best_score = 0.0
+            for track_id in list(available_ids):
+                track = self.tracks.get(track_id)
+                if not track:
+                    continue
+                iou = bbox_iou(det.bbox, track["bbox"])
+                dist = normalized_center_distance(det.bbox, track["bbox"])
+                score = max(iou, 1.0 - dist)
+                if (iou >= 0.12 or dist <= 0.55) and score > best_score:
+                    best_score = score
+                    best_id = track_id
+            if best_id is None:
+                best_id = self.next_track_id
+                self.next_track_id += 1
+            available_ids.discard(best_id)
+            det.track_id = best_id
+            self.tracks[best_id] = {"bbox": list(det.bbox), "last_seen": now, "confidence": det.confidence}
+            assigned.append(det)
+        return assigned
+
+    def _cleanup_tracks(self, now: float) -> None:
+        stale = [track_id for track_id, item in self.tracks.items() if now - float(item.get("last_seen", 0.0)) > 2.0]
+        active_ids = set(self.tracks.keys()) - set(stale)
+        for track_id in stale:
+            self.tracks.pop(track_id, None)
+            self.previous_wave_rois.pop(track_id, None)
+        if self.wave_lock_track_id is not None and self.wave_lock_track_id not in active_ids and now >= self.wave_lock_until:
+            self.wave_lock_track_id = None
+
     def _estimate_wave_motion(self, cv2, frame, detections: list[HumanDetection]) -> dict[str, Any]:
         if not detections:
-            self.previous_wave_roi = None
+            self.previous_wave_rois.clear()
             return {"available": False, "reason": "no_person"}
 
-        det = max(detections, key=lambda item: max(0, item.bbox[2] - item.bbox[0]) * max(0, item.bbox[3] - item.bbox[1]))
+        candidates: list[dict[str, Any]] = []
+        lock_active = time.monotonic() < self.wave_lock_until and self.wave_lock_track_id is not None
+        ordered = sorted(detections, key=lambda item: box_area(item.bbox), reverse=True)
+        if lock_active:
+            locked = [item for item in ordered if item.track_id == self.wave_lock_track_id]
+            ordered = locked or ordered[:1]
+        else:
+            ordered = ordered[:3]
+        for det in ordered:
+            candidate = self._estimate_detection_wave_motion(cv2, frame, det)
+            if candidate.get("available"):
+                candidates.append(candidate)
+
+        if not candidates:
+            return {"available": False, "reason": "no_wave_candidates", "candidates": []}
+
+        best = max(candidates, key=lambda item: float(item.get("motion_norm") or 0.0))
+        return {
+            **best,
+            "available": True,
+            "reason": "multi_track_optical_flow",
+            "candidates": candidates,
+            "locked_track_id": self.wave_lock_track_id if lock_active else None,
+        }
+
+    def _estimate_detection_wave_motion(self, cv2, frame, det: HumanDetection) -> dict[str, Any]:
+        track_id = int(det.track_id or 0)
         height, width = frame.shape[:2]
         x1, y1, x2, y2 = det.bbox
         box_w = max(1, x2 - x1)
@@ -520,8 +611,8 @@ class CameraService:
         left = max(0, x1 - pad_x)
         right = min(width, x2 + pad_x)
         if right - left < 16 or bottom - top < 16:
-            self.previous_wave_roi = None
-            return {"available": False, "reason": "roi_too_small"}
+            self.previous_wave_rois.pop(track_id, None)
+            return {"available": False, "reason": "roi_too_small", "track_id": track_id}
 
         import numpy as np
 
@@ -529,12 +620,21 @@ class CameraService:
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
         roi = cv2.resize(gray, (80, 80), interpolation=cv2.INTER_AREA)
         roi = cv2.GaussianBlur(roi, (5, 5), 0)
-        if self.previous_wave_roi is None:
-            self.previous_wave_roi = roi
-            return {"available": True, "reason": "priming", "motion_norm": 0.0, "balance": 0.0}
+        previous_roi = self.previous_wave_rois.get(track_id)
+        if previous_roi is None:
+            self.previous_wave_rois[track_id] = roi
+            return {
+                "available": True,
+                "reason": "priming",
+                "track_id": track_id,
+                "motion_norm": 0.0,
+                "balance": 0.0,
+                "bbox": det.bbox,
+                "confidence": det.confidence,
+            }
 
         flow = cv2.calcOpticalFlowFarneback(
-            self.previous_wave_roi,
+            previous_roi,
             roi,
             None,
             0.5,
@@ -545,8 +645,8 @@ class CameraService:
             1.1,
             0,
         )
-        diff = cv2.absdiff(roi, self.previous_wave_roi)
-        self.previous_wave_roi = roi
+        diff = cv2.absdiff(roi, previous_roi)
+        self.previous_wave_rois[track_id] = roi
 
         # Remove global crop motion first. The remaining residual flow is much
         # closer to "arm/hand moving while the person stays mostly still".
@@ -588,6 +688,7 @@ class CameraService:
         return {
             "available": True,
             "reason": "optical_flow",
+            "track_id": track_id,
             "motion_norm": motion_norm,
             "balance": balance,
             "left_motion": left_motion,
@@ -603,21 +704,31 @@ class CameraService:
             "confidence": det.confidence,
         }
 
-    def set_wave_lock(self, duration_s: float = 3.0, label: str = "WAVE LOCK") -> None:
+    def set_wave_lock(self, duration_s: float = 3.0, label: str = "WAVE LOCK", track_id: int | None = None) -> None:
         with self.lock:
             self.wave_lock_until = time.monotonic() + max(0.5, duration_s)
             self.wave_lock_label = label
+            self.wave_lock_track_id = track_id
 
     def _draw_overlay(self, cv2, frame, detections: list[HumanDetection]) -> None:
         lock_active = time.monotonic() < self.wave_lock_until
-        locked_det = max(detections, key=lambda item: max(0, item.bbox[2] - item.bbox[0]) * max(0, item.bbox[3] - item.bbox[1])) if detections else None
-        for det in detections:
+        locked_det = None
+        if detections:
+            if lock_active and self.wave_lock_track_id is not None:
+                locked_det = next((item for item in detections if item.track_id == self.wave_lock_track_id), None)
+            if locked_det is None:
+                locked_det = max(detections, key=lambda item: box_area(item.bbox))
+        visible_detections = [locked_det] if lock_active and locked_det is not None else detections
+        for det in visible_detections:
+            if det is None:
+                continue
             x1, y1, x2, y2 = det.bbox
             is_locked = lock_active and locked_det is det
             color = (255, 0, 0) if is_locked else (0, 255, 0)
             thickness = 3 if is_locked else 2
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-            label = f"{self.wave_lock_label} {det.confidence:.2f}" if is_locked else f"human {det.confidence:.2f}"
+            label_id = f"ID {det.track_id} " if det.track_id is not None else ""
+            label = f"{self.wave_lock_label} {label_id}{det.confidence:.2f}" if is_locked else f"{label_id}human {det.confidence:.2f}"
             cv2.putText(frame, label, (x1, max(18, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         fps = self.stream_fps_value
@@ -656,6 +767,8 @@ class CameraService:
                 "v4l2": v4l2_summary(),
                 "optimizations": ["threaded_capture", "frame_skip", "mjpg", "low_resolution", "warmup_suppression"],
                 "wave_lock_active": time.monotonic() < self.wave_lock_until,
+                "wave_locked_track_id": self.wave_lock_track_id,
+                "active_track_ids": sorted(self.tracks.keys()),
             },
         )
 

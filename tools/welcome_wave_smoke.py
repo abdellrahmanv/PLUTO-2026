@@ -66,7 +66,7 @@ def run_checks(base: str, hardware_flow: bool) -> None:
     assert status_code == 200, status_code
     status = json.loads(raw_status.decode("utf-8"))
     assert "wave" in status
-    assert status["wave"]["detector_status"] == "simple_box_motion"
+    assert status["wave"]["detector_status"] in {"tracked_pc_rule_lite", "simple_box_motion"}
     assert "wave_lock_active" in status["camera"]["details"]
 
     if status["current_state"] == "ERROR":
@@ -165,11 +165,46 @@ def run_detector_checks() -> None:
         if status.confirmed and status.reason == "confirmed_wave":
             confirmed_status = status
     assert confirmed_status is not None, status
-    assert confirmed_status.algorithm == "pc_rule_lite", confirmed_status
+    assert confirmed_status.algorithm == "tracked_pc_rule_lite", confirmed_status
     assert confirmed_status.raised is True, confirmed_status
     assert confirmed_status.hand_amp >= 0.16, confirmed_status
     assert confirmed_status.hand_sign_changes >= 2, confirmed_status
     assert confirmed_status.hand_dx_dy >= 1.2, confirmed_status
+
+    detector = SimpleWaveDetector(cooldown_s=0.5)
+    confirmed_status = None
+    for index, hand_x in enumerate(hand_positions):
+        status = detector.update(
+            {
+                **base,
+                "detections": [
+                    {"bbox": [15, 50, 120, 270], "confidence": 0.80, "track_id": 1},
+                    {"bbox": [170, 45, 310, 285], "confidence": 0.89, "track_id": 2},
+                ],
+                "wave_motion": {
+                    "available": True,
+                    "reason": "multi_track_optical_flow",
+                    "candidates": [
+                        {"track_id": 1, "motion_norm": 0.004, "balance": 0.0, "hand_valid": False},
+                        {
+                            "track_id": 2,
+                            "motion_norm": 0.034,
+                            "balance": 0.5 if hand_x > 0 else -0.5,
+                            "hand_valid": True,
+                            "hand_x_norm": hand_x,
+                            "hand_y_norm": 0.32,
+                            "raised_region": True,
+                        },
+                    ],
+                },
+            },
+            now=float(index) * 0.2,
+        )
+        if status.confirmed and status.reason == "confirmed_wave":
+            confirmed_status = status
+    assert confirmed_status is not None, status
+    assert confirmed_status.track_id == 2, confirmed_status
+    assert confirmed_status.target_id == "track_2", confirmed_status
 
 
 def main() -> int:

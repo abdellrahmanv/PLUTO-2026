@@ -69,7 +69,7 @@ def main() -> int:
         assert "error" in status
         assert "manual" in status
         assert "wave" in status
-        assert status["wave"]["detector_status"] == "simple_box_motion"
+        assert status["wave"]["detector_status"] in {"tracked_pc_rule_lite", "simple_box_motion"}
         assert "talk" in status
         assert "audio" in status
         assert "allowed_next_states" in status

@@ -1,19 +1,24 @@
-"""Pi-friendly WELCOME wave detection using the PC prototype's rules.
+"""Pi-friendly WELCOME wave detection with desktop-style tracked targets.
 
 The desktop prototype used YOLOv5 + SORT + MediaPipe pose. Pluto keeps the
-parts that made it reliable but avoids the heavy stack on the Raspberry Pi:
+behavior that mattered:
 
-1. Reuse the existing TFLite human boxes from the camera service.
-2. Extract a cheap hand-motion candidate from the upper human crop.
-3. Apply the same gates as the PC detector: raised region, horizontal
-   amplitude, x direction changes, horizontal-dominates-vertical, confirmation
-   streak, and cooldown.
+1. Multiple people can be visible at the same time.
+2. Each person has a stable lightweight track ID.
+3. Each track has its own wave buffer and confirmation streak.
+4. The first confirmed waver becomes the locked target.
+
+The heavy parts are replaced:
+
+- TFLite person boxes are reused instead of YOLOv5.
+- Simple IoU/center tracking is done in the camera service instead of SORT.
+- A tiny optical-flow hand candidate replaces MediaPipe wrist landmarks.
 """
 
 from __future__ import annotations
 
 import time
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -21,6 +26,7 @@ from typing import Any
 @dataclass
 class WaveSample:
     timestamp: float
+    track_id: int
     center_x: float
     width: float
     confidence: float
@@ -52,8 +58,11 @@ class WaveStatus:
     raised: bool = False
     frame_pass: bool = False
     confirm_streak: int = 0
-    algorithm: str = "pc_rule_lite"
+    algorithm: str = "tracked_pc_rule_lite"
+    track_id: int | None = None
     target_id: str | None = None
+    visible_track_ids: list[int] | None = None
+    locked_track_id: int | None = None
     cooldown_remaining_s: float = 0.0
     last_confirmed_at: float | None = None
 
@@ -62,7 +71,7 @@ class WaveStatus:
 
 
 class SimpleWaveDetector:
-    """Detect deliberate waving with the PC prototype gates, minus pose model."""
+    """Detect deliberate waving per tracked person."""
 
     def __init__(
         self,
@@ -91,80 +100,100 @@ class SimpleWaveDetector:
         self.confirm_k = confirm_k
         self.min_confidence = min_confidence
         self.cooldown_s = cooldown_s
-        self.samples: deque[WaveSample] = deque(maxlen=48)
-        self.confirm_streak = 0
-        self.last_confirmed_at: float | None = None
+        self.samples: dict[int, deque[WaveSample]] = defaultdict(lambda: deque(maxlen=48))
+        self.confirm_streak: dict[int, int] = defaultdict(int)
+        self.last_confirmed_at: dict[int, float] = {}
+        self.locked_track_id: int | None = None
         self.status = WaveStatus()
 
     def update(self, camera_status: dict[str, Any], now: float | None = None) -> WaveStatus:
         now = time.monotonic() if now is None else now
-        detections = camera_status.get("detections") or []
+        detections = [item for item in (camera_status.get("detections") or []) if isinstance(item, dict) and item.get("bbox")]
         resolution = camera_status.get("resolution") or camera_status.get("configured_resolution") or [320, 320]
         frame_width = max(float(resolution[0] or 320), 1.0)
+        camera_available = bool(camera_status.get("available", False))
 
-        target = self._select_target(detections)
-        if target is None:
-            self.samples.clear()
-            self.confirm_streak = 0
+        if not detections:
+            self._cleanup(set())
             self.status = WaveStatus(
-                available=bool(camera_status.get("available", False)),
+                available=camera_available,
                 confirmed=False,
                 reason="no_person",
-                cooldown_remaining_s=self._cooldown_remaining(now),
-                last_confirmed_at=self.last_confirmed_at,
+                visible_track_ids=[],
+                locked_track_id=self.locked_track_id,
+                last_confirmed_at=self._latest_confirmed_at(),
             )
             return self.status
 
-        bbox = target.get("bbox") or [0, 0, 0, 0]
-        x1, _y1, x2, _y2 = [float(value) for value in bbox]
-        confidence = float(target.get("confidence") or 0.0)
-        motion = camera_status.get("wave_motion") or {}
-        hand_y = motion.get("hand_y_norm")
-        sample = WaveSample(
-            timestamp=now,
-            center_x=(x1 + x2) / 2.0,
-            width=max(1.0, x2 - x1),
-            confidence=confidence,
-            motion_norm=float(motion.get("motion_norm") or 0.0),
-            motion_balance=float(motion.get("balance") or 0.0),
-            hand_valid=bool(motion.get("hand_valid", False)),
-            hand_x_norm=float(motion.get("hand_x_norm") or 0.0),
-            hand_y_norm=float(hand_y if hand_y is not None else 1.0),
-            raised_region=bool(motion.get("raised_region", False)),
-        )
-        self.samples.append(sample)
-        self._trim(now)
+        wave_motion = camera_status.get("wave_motion") or {}
+        candidates = wave_motion.get("candidates") if isinstance(wave_motion, dict) else None
+        if not candidates and isinstance(wave_motion, dict) and (
+            wave_motion.get("available")
+            or "motion_norm" in wave_motion
+            or "balance" in wave_motion
+            or "hand_valid" in wave_motion
+        ):
+            candidates = [wave_motion]
+        candidate_by_track = {
+            int(item.get("track_id") or 0): item
+            for item in (candidates or [])
+            if isinstance(item, dict)
+        }
 
-        status = self._evaluate(frame_width, now)
-        if status.confirmed:
-            self.last_confirmed_at = now
-            status.last_confirmed_at = now
+        active_ids: set[int] = set()
+        for index, detection in enumerate(detections):
+            track_id = int(detection.get("track_id") or index)
+            active_ids.add(track_id)
+            bbox = detection.get("bbox") or [0, 0, 0, 0]
+            x1, _y1, x2, _y2 = [float(value) for value in bbox]
+            motion = candidate_by_track.get(track_id, {})
+            hand_y = motion.get("hand_y_norm")
+            self.samples[track_id].append(
+                WaveSample(
+                    timestamp=now,
+                    track_id=track_id,
+                    center_x=(x1 + x2) / 2.0,
+                    width=max(1.0, x2 - x1),
+                    confidence=float(detection.get("confidence") or motion.get("confidence") or 0.0),
+                    motion_norm=float(motion.get("motion_norm") or 0.0),
+                    motion_balance=float(motion.get("balance") or 0.0),
+                    hand_valid=bool(motion.get("hand_valid", False)),
+                    hand_x_norm=float(motion.get("hand_x_norm") or 0.0),
+                    hand_y_norm=float(hand_y if hand_y is not None else 1.0),
+                    raised_region=bool(motion.get("raised_region", False)),
+                )
+            )
+            self._trim(track_id, now)
+
+        self._cleanup(active_ids)
+        statuses = [self._evaluate_track(track_id, frame_width, now) for track_id in sorted(active_ids)]
+        confirmed = [item for item in statuses if item.confirmed]
+        if confirmed:
+            status = max(confirmed, key=lambda item: (item.reason == "confirmed_wave", item.score, item.sample_count))
+            self.locked_track_id = status.track_id
+        else:
+            status = max(statuses, key=lambda item: (item.score, item.sample_count), default=WaveStatus(available=camera_available))
+
+        status.available = camera_available
+        status.visible_track_ids = sorted(active_ids)
+        status.locked_track_id = self.locked_track_id
         self.status = status
         return status
 
-    def _select_target(self, detections: list[Any]) -> dict[str, Any] | None:
-        dicts = [item for item in detections if isinstance(item, dict) and item.get("bbox")]
-        if not dicts:
-            return None
-        return max(dicts, key=lambda item: box_area(item.get("bbox") or [0, 0, 0, 0]))
-
-    def _trim(self, now: float) -> None:
-        while self.samples and now - self.samples[0].timestamp > self.window_s:
-            self.samples.popleft()
-
-    def _evaluate(self, frame_width: float, now: float) -> WaveStatus:
-        cooldown = self._cooldown_remaining(now)
+    def _evaluate_track(self, track_id: int, frame_width: float, now: float) -> WaveStatus:
+        cooldown = self._cooldown_remaining(track_id, now)
         if cooldown > 0:
-            return self._status(True, "cooldown_active", frame_width, now, cooldown, score=1.0)
+            return self._status(track_id, True, "cooldown_active", frame_width, now, cooldown, score=1.0)
 
-        if len(self.samples) < self.min_samples:
-            return self._status(False, "not_enough_samples", frame_width, now, cooldown)
+        samples = list(self.samples.get(track_id, []))
+        if len(samples) < self.min_samples:
+            return self._status(track_id, False, "not_enough_samples", frame_width, now, cooldown)
 
-        confidence = sum(item.confidence for item in self.samples) / max(len(self.samples), 1)
+        confidence = sum(item.confidence for item in samples) / max(len(samples), 1)
         if confidence < self.min_confidence:
-            return self._status(False, "low_confidence", frame_width, now, cooldown)
+            return self._status(track_id, False, "low_confidence", frame_width, now, cooldown)
 
-        metrics = self._metrics(frame_width)
+        metrics = self._metrics(track_id, frame_width)
         hand_gate = (
             metrics["raised"]
             and metrics["hand_amp"] >= self.hand_amp_thresh
@@ -173,11 +202,11 @@ class SimpleWaveDetector:
             and metrics["motion_norm"] >= self.min_motion_norm
         )
         if hand_gate:
-            self.confirm_streak += 2
+            self.confirm_streak[track_id] += 2
         else:
-            self.confirm_streak = max(0, self.confirm_streak - 1)
+            self.confirm_streak[track_id] = max(0, self.confirm_streak[track_id] - 1)
 
-        pc_rule_wave = self.confirm_streak >= self.confirm_k
+        pc_rule_wave = self.confirm_streak[track_id] >= self.confirm_k
         box_wave = metrics["direction_changes"] >= self.min_direction_changes and (
             metrics["amplitude_norm"] >= self.min_amplitude_norm or metrics["width_change_norm"] >= self.min_width_change_norm
         )
@@ -192,24 +221,26 @@ class SimpleWaveDetector:
                 and metrics["amplitude_norm"] < self.min_amplitude_norm
                 and metrics["width_change_norm"] < self.min_width_change_norm
             ):
-                return self._status(False, "amplitude_too_low", frame_width, now, cooldown)
-            return self._status(False, "not_enough_direction_changes", frame_width, now, cooldown)
+                return self._status(track_id, False, "amplitude_too_low", frame_width, now, cooldown)
+            return self._status(track_id, False, "not_enough_direction_changes", frame_width, now, cooldown)
 
         score = min(
             1.0,
             max(
                 metrics["hand_amp"] / self.hand_amp_thresh,
                 metrics["motion_norm"] / self.min_motion_norm,
-                self.confirm_streak / self.confirm_k,
+                self.confirm_streak[track_id] / self.confirm_k,
                 metrics["amplitude_norm"] / self.min_amplitude_norm,
                 metrics["width_change_norm"] / self.min_width_change_norm,
             )
             / 2.0,
         )
-        return self._status(True, "confirmed_wave", frame_width, now, cooldown, score=score, frame_pass=hand_gate)
+        self.last_confirmed_at[track_id] = now
+        return self._status(track_id, True, "confirmed_wave", frame_width, now, cooldown, score=score, frame_pass=hand_gate)
 
     def _status(
         self,
+        track_id: int,
         confirmed: bool,
         reason: str,
         frame_width: float,
@@ -218,7 +249,8 @@ class SimpleWaveDetector:
         score: float = 0.0,
         frame_pass: bool = False,
     ) -> WaveStatus:
-        metrics = self._metrics(frame_width)
+        metrics = self._metrics(track_id, frame_width)
+        samples = self.samples.get(track_id, [])
         return WaveStatus(
             available=True,
             confirmed=confirmed,
@@ -226,7 +258,7 @@ class SimpleWaveDetector:
             score=score,
             confidence=metrics["confidence"],
             side=metrics["side"],
-            sample_count=len(self.samples),
+            sample_count=len(samples),
             direction_changes=metrics["direction_changes"],
             amplitude_norm=metrics["amplitude_norm"],
             width_change_norm=metrics["width_change_norm"],
@@ -237,28 +269,17 @@ class SimpleWaveDetector:
             hand_dx_dy=metrics["hand_dx_dy"],
             raised=metrics["raised"],
             frame_pass=frame_pass,
-            confirm_streak=self.confirm_streak,
-            target_id="human_0" if self.samples else None,
+            confirm_streak=self.confirm_streak.get(track_id, 0),
+            track_id=track_id,
+            target_id=f"track_{track_id}",
             cooldown_remaining_s=cooldown,
-            last_confirmed_at=self.last_confirmed_at,
+            last_confirmed_at=self.last_confirmed_at.get(track_id),
         )
 
-    def _metrics(self, frame_width: float) -> dict[str, Any]:
-        samples = list(self.samples)
+    def _metrics(self, track_id: int, frame_width: float) -> dict[str, Any]:
+        samples = list(self.samples.get(track_id, []))
         if not samples:
-            return {
-                "direction_changes": 0,
-                "amplitude_norm": 0.0,
-                "width_change_norm": 0.0,
-                "motion_norm": 0.0,
-                "motion_direction_changes": 0,
-                "hand_amp": 0.0,
-                "hand_sign_changes": 0,
-                "hand_dx_dy": 0.0,
-                "raised": False,
-                "confidence": 0.0,
-                "side": "unknown",
-            }
+            return empty_metrics()
 
         direction_changes = count_direction_changes([item.center_x for item in samples])
         amplitude_norm = (max(item.center_x for item in samples) - min(item.center_x for item in samples)) / frame_width
@@ -298,21 +319,51 @@ class SimpleWaveDetector:
             "side": side,
         }
 
-    def _cooldown_remaining(self, now: float) -> float:
-        if self.last_confirmed_at is None:
+    def _trim(self, track_id: int, now: float) -> None:
+        samples = self.samples.get(track_id)
+        if samples is None:
+            return
+        while samples and now - samples[0].timestamp > self.window_s:
+            samples.popleft()
+
+    def _cleanup(self, active_ids: set[int]) -> None:
+        all_ids = set(self.samples.keys()) | set(self.confirm_streak.keys()) | set(self.last_confirmed_at.keys())
+        for track_id in all_ids - active_ids:
+            if track_id == self.locked_track_id:
+                continue
+            self.samples.pop(track_id, None)
+            self.confirm_streak.pop(track_id, None)
+            self.last_confirmed_at.pop(track_id, None)
+
+    def _cooldown_remaining(self, track_id: int, now: float) -> float:
+        confirmed_at = self.last_confirmed_at.get(track_id)
+        if confirmed_at is None:
             return 0.0
-        return max(0.0, self.cooldown_s - (now - self.last_confirmed_at))
+        return max(0.0, self.cooldown_s - (now - confirmed_at))
+
+    def _latest_confirmed_at(self) -> float | None:
+        if not self.last_confirmed_at:
+            return None
+        return max(self.last_confirmed_at.values())
 
     def status_dict(self) -> dict[str, Any]:
         return self.status.to_dict()
 
 
-def box_area(bbox: list[Any]) -> float:
-    try:
-        x1, y1, x2, y2 = [float(value) for value in bbox]
-        return max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    except Exception:
-        return 0.0
+def empty_metrics() -> dict[str, Any]:
+    return {
+        "direction_changes": 0,
+        "amplitude_norm": 0.0,
+        "width_change_norm": 0.0,
+        "motion_norm": 0.0,
+        "motion_direction_changes": 0,
+        "hand_amp": 0.0,
+        "hand_sign_changes": 0,
+        "hand_dx_dy": 0.0,
+        "raised": False,
+        "confidence": 0.0,
+        "side": "unknown",
+    }
 
 
 def count_direction_changes(values: list[float], deadband: float = 2.5) -> int:

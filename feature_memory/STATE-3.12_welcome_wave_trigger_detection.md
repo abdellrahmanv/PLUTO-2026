@@ -141,23 +141,31 @@ prototype unchanged.
 Implemented v1 path:
 
 1. Keep the current TFLite YOLOv8n person detector for person boxes.
-2. Watch the largest human box over a short time window.
-3. Extract a low-cost hand candidate from optical flow inside an expanded
+2. Assign lightweight track IDs to visible people with IoU/center matching.
+3. Keep one wave buffer and confirmation streak per track.
+4. Extract a low-cost hand candidate from optical flow inside each selected
    upper person crop.
-4. Apply the desktop prototype's rules without loading its heavy stack:
+5. Apply the desktop prototype's rules without loading its heavy stack:
    raised region, horizontal hand amplitude, x direction changes,
    horizontal-dominates-vertical ratio, confirmation streak, and cooldown.
-5. Fall back to broad box/pixel motion if hand candidate evidence is imperfect.
-6. Publish a structured event:
+6. Fall back to broad box/pixel motion if hand candidate evidence is imperfect.
+7. Publish a structured event:
 
 ```text
 WELCOME_TRIGGER:WAVE
 target_id=<track_id>
+track_id=<integer>
 side=<left|right>
 score=<0.0-1.0>
 confidence=<0.0-1.0>
 reason=<confirmed_wave>
 ```
+
+When a wave is confirmed, the camera overlay sets a temporary lock on that
+track. While the lock is active, the MJPEG feed draws only the locked person
+box in red with `WAVE LOCK` and suppresses other visible person boxes. This
+matches the intended desktop behavior: Pluto can see multiple people, but once
+one person waves, that person becomes the interaction target.
 
 5. Let the mode manager accept or reject the event.
 
@@ -174,12 +182,13 @@ POST /api/welcome/wave-trigger
 ```
 
 This v1 detector is intentionally lighter than the local prototype but now
-uses the same decision logic. It does not prove MediaPipe wrist landmarks.
-Instead it estimates a moving hand candidate from optical flow in the expanded
-upper crop and feeds that into PC-style wave gates. Optical flow is stronger
-than frame differencing because it keeps direction evidence, subtracts global
-crop motion, and can see left/right hand movement even when the full person box
-is stable. WELCOME entry still depends on the mode manager and STM32 stop guard.
+uses the same interaction logic. It does not prove MediaPipe wrist landmarks.
+Instead it assigns simple track IDs, estimates a moving hand candidate from
+optical flow in each selected upper crop, and feeds that into PC-style wave
+gates. Optical flow is stronger than frame differencing because it keeps
+direction evidence, subtracts global crop motion, and can see left/right hand
+movement even when the full person box is stable. WELCOME entry still depends
+on the mode manager and STM32 stop guard.
 
 WELCOME entry accepts the same stop-guard evidence used by WELCOME_TALK:
 an explicit STM32 `ACK:STOP` is preferred. If that ACK is missed but the STM32
@@ -238,6 +247,8 @@ Website impact:
 - Show detector reason, sample count, score, confidence, side, and latest event.
 - Show `motion_norm`, `motion_direction_changes`, `raised`, `hand_amp`,
   `hand_sign_changes`, and `hand_dx_dy` so hand-wave tuning is visible.
+- Show `track_id`, visible track IDs, and locked track ID for multi-person
+  debugging.
 - Show whether the latest WELCOME trigger came from operator request or wave.
 
 ## Verification Plan
@@ -311,3 +322,4 @@ WELCOME.
 | 2026-05-27 | Added upper-crop pixel motion evidence | Detect hand waves without requiring pose landmarks |
 | 2026-05-27 | Ported PC wave rules into Pi-friendly detector | Keep raised/oscillating-hand behavior without YOLOv5, SORT, or MediaPipe runtime |
 | 2026-05-29 | Replaced frame-diff hand estimate with optical flow | Preserve motion direction while staying light enough for Raspberry Pi |
+| 2026-05-29 | Added lightweight multi-person tracking and red lock overlay | Match desktop behavior: choose one waving target and suppress other boxes |
