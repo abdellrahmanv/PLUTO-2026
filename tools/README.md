@@ -3,6 +3,31 @@
 This folder contains standalone validation tools. Tools must prove one feature
 at a time and must stay safe by default.
 
+## Feature-By-Feature Validation
+
+Run the safe software feature gate:
+
+```bash
+python3 tools/validate_features.py
+```
+
+On the Raspberry Pi, include the safe STM32 checks:
+
+```bash
+/home/pi/yolo/env/bin/python tools/validate_features.py --hardware
+```
+
+Audio and Uno checks are explicit because they depend on optional hardware:
+
+```bash
+/home/pi/yolo/env/bin/python tools/validate_features.py --hardware --audio --require-audio
+/home/pi/yolo/env/bin/python tools/validate_features.py --uno
+```
+
+The validator prints `PASS`, `SKIP`, `FAIL`, or `OPTIONAL_FAIL` for each
+feature. `SKIP` is acceptable only for missing optional or non-required local
+hardware during laptop checks.
+
 ## Phase 1 - STM32 Serial Validation
 
 Run from the repository root on the Raspberry Pi or development laptop:
