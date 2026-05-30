@@ -367,6 +367,9 @@ Requirements must stay testable. Growth without verification is not acceptable.
 | IF-STM32-010 | STM32 shall respond to `CMD:PING` within 100 ms. | Timing test |
 | IF-STM32-011 | STM32 telemetry shall include battery voltage when hoverboard feedback is valid. | Telemetry test |
 | IF-STM32-012 | STM32 shall include enough alert reason text for Pi to choose IDLE, ERROR, or continue. | Fault injection |
+| IF-STM32-013 | Pi shall support sending `CMD:RETURN` for odometry-guided home return and tracking `ACK:RETURN` / `ACK:RETURN_COMPLETE`. | Command log |
+| IF-STM32-014 | Pi shall support sending `CMD:RESET_HOME` to mark current coordinates as home position. | Command log |
+| IF-STM32-015 | Pi shall support sending NEMA stepper movement as `CMD:ARM:<steps>,<speed>` and tracking completion via `ACK:ARM_DONE`. | Command log |
 
 ### Pi To Uno
 
@@ -901,8 +904,9 @@ WELCOME_DONE
 Intent:
 
 ```text
-Pluto performs a bounded, slow, fixed-direction dance selected by the operator,
-while never sacrificing obstacle safety.
+Pluto performs a bounded Michael Jackson moonwalk-style dance selected by the
+operator inside a fixed 3 m x 3 m floor envelope with 3 m vertical clearance,
+while never leaving that envelope or sacrificing obstacle safety.
 ```
 
 ### State Entry Requirements
@@ -921,12 +925,16 @@ while never sacrificing obstacle safety.
 | --- | --- | --- | --- |
 | STATE-4.10 | DANCE shall play a preloaded audio file. | Pi | Audio test |
 | STATE-4.11 | DANCE shall use bounded motion patterns only. | Pi | Command log |
-| STATE-4.12 | DANCE shall keep fixed facing direction in v1. | Pi + STM32 | Heading/observation |
-| STATE-4.13 | DANCE shall use small forward/backward or sway movements only. | Pi + STM32 | Command bounds |
-| STATE-4.14 | DANCE may move the NEMA arm with bounded stepper commands. | Pi + STM32 | `CMD:ARM` log |
+| STATE-4.12 | DANCE shall treat the dance stage as a configured 3 m x 3 m floor envelope with 3 m vertical clearance in v1. | Pi + STM32 | Envelope config review |
+| STATE-4.13 | DANCE shall use STM32 encoder odometry to estimate Pluto position inside the dance envelope. | Pi + STM32 | Odometry log |
+| STATE-4.14 | DANCE shall not command motion that intentionally leaves the 3 m x 3 m dance envelope. | Pi + STM32 | Boundary command test |
 | STATE-4.15 | DANCE shall continue STM32 heartbeat during audio playback. | Pi | Heartbeat log |
 | STATE-4.16 | DANCE arm movements shall remain inside DANCE arm limits. | Pi + STM32 | Arm bounds test |
 | STATE-4.17 | DANCE shall not command arm movement if arm subsystem is unavailable or unvalidated. | Pi | Hardware gate test |
+| STATE-4.18 | DANCE shall use Michael Jackson moonwalk-inspired backward/forward glide segments synchronized to the preloaded song when audio timing is available. | Pi | Dance sequence review |
+| STATE-4.19 | DANCE may change facing direction in 90 degree increments only when the new heading keeps Pluto inside the dance envelope. | Pi + STM32 | Heading command test |
+| STATE-4.19.1 | DANCE may move the NEMA arm with bounded stepper commands only after arm hardware validation passes. | Pi + STM32 | `CMD:ARM` log |
+| STATE-4.19.2 | DANCE shall record the current envelope estimate, heading quadrant, and odometry confidence for debugging. | Pi | Website/status review |
 
 ### Dance Safety Requirements
 
@@ -934,19 +942,21 @@ while never sacrificing obstacle safety.
 | --- | --- | --- | --- |
 | STATE-4.20 | DANCE shall reduce or stop motion if any obstacle is inside slow threshold. | Pi + STM32 | Obstacle test |
 | STATE-4.21 | DANCE shall immediately stop wheel motion if obstacle is inside stop threshold. | STM32 | Obstacle test |
-| STATE-4.22 | DANCE shall not use large translation range in v1. | Pi | Command bounds |
+| STATE-4.22 | DANCE shall clamp every movement segment so cumulative odometry remains inside the configured 3 m x 3 m envelope. | Pi + STM32 | Boundary command test |
 | STATE-4.23 | DANCE shall stop if audio system fails. | Pi | Audio fault test |
 | STATE-4.24 | DANCE shall stop if STM32 reports any critical alert. | Pi | Alert test |
 | STATE-4.25 | DANCE shall stop arm motion before or at the same time as wheel stop on critical fault. | Pi + STM32 | Fault test |
 | STATE-4.26 | DANCE shall use optimized vision perception when available to detect humans or obstacles entering the dance envelope. | Pi | Vision safety test |
 | STATE-4.27 | DANCE vision safety should use threaded capture, low resolution, frame skipping, detection hold, and tracked boxes to keep latency bounded. | Pi | CPU/FPS log |
 | STATE-4.28 | If vision detects a human or obstacle near the dance envelope, Pi shall shrink, pause, or stop dance motion. | Pi + STM32 | Dance obstacle test |
-| STATE-4.28.1 | Initial DANCE implementation shall run in dry-run mode until bounded audio, obstacle, vision, and proposed-motion evidence are reviewed. | Pi | Dry-run smoke test |
+| STATE-4.28.1 | Initial DANCE implementation shall run in dry-run mode until bounded audio, odometry envelope, obstacle, vision, and proposed-motion evidence are reviewed. | Pi | Dry-run smoke test |
 | STATE-4.28.2 | DANCE dry-run shall not send `CMD:DRIVE` or `CMD:ARM`; it may only send `CMD:STOP` as a guard. | Pi + STM32 | Serial command log |
-| STATE-4.28.3 | DANCE dry-run shall expose dance step, audio readiness, obstacle status, vision envelope status, proposed motion, range limit, and reason on the website. | Pi | Website status review |
+| STATE-4.28.3 | DANCE dry-run shall expose dance step, audio readiness, obstacle status, vision envelope status, odometry envelope status, proposed motion, range limit, and reason on the website. | Pi | Website status review |
 | STATE-4.28.4 | DANCE dry-run shall propose STOP if STM32 obstacle telemetry is missing, blocked, or if vision reports a person inside the dance envelope. | Pi | Planner smoke test |
-| STATE-4.28.5 | DANCE dry-run shall keep a fixed facing direction by proposing zero steer for wheel movement in v1. | Pi | Command proposal review |
+| STATE-4.28.5 | DANCE dry-run shall propose only bounded forward/backward glide commands and 90 degree direction-change steps that remain inside the envelope. | Pi | Command proposal review |
 | STATE-4.28.6 | DANCE dry-run shall keep a STOP guard active while the DANCE state is evaluated. | Pi + STM32 | STOP guard log |
+| STATE-4.28.7 | If an obstacle is detected in the direction of the next dance movement, Pi shall stop or choose a safe non-colliding segment instead of moving toward that obstacle. | Pi + STM32 | Directional obstacle test |
+| STATE-4.28.8 | If encoder odometry is unavailable, invalid, or drifting beyond configured confidence, DANCE shall remain dry-run or stop live motion. | Pi + STM32 | Odometry fault test |
 
 ### Exit Requirements
 
@@ -961,14 +971,16 @@ while never sacrificing obstacle safety.
 
 | ID | Test | Expected Evidence |
 | --- | --- | --- |
-| VER-DANCE-001 | Start DANCE from IDLE. | `MODE:DANCE`, audio starts, bounded commands |
-| VER-DANCE-002 | Place obstacle during dance. | motion reduces/stops |
+| VER-DANCE-001 | Start DANCE from IDLE. | `MODE:DANCE`, audio starts, bounded envelope-aware commands |
+| VER-DANCE-002 | Place obstacle in the next movement direction during dance. | motion toward obstacle stops or changes to safe segment |
 | VER-DANCE-003 | Stop dance manually. | audio stops, `CMD:STOP`, IDLE |
 | VER-DANCE-004 | Let song finish. | `CMD:STOP`, IDLE |
 | VER-DANCE-005 | Unplug STM32 during dance. | ERROR state |
 | VER-DANCE-006 | Run DANCE with arm enabled. | bounded arm commands, stop on fault |
 | VER-DANCE-007 | Run DANCE with speaker missing. | DANCE blocked or explicit silent mode |
 | VER-DANCE-008 | Human or obstacle enters dance envelope with vision enabled. | motion shrinks, pauses, or stops |
+| VER-DANCE-009 | Command moonwalk segments near envelope edge. | commands clamp before leaving 3 m x 3 m boundary |
+| VER-DANCE-010 | Command 90 degree direction change. | heading changes by configured quadrant and stays inside envelope |
 
 ## STATE-5: ERROR
 
