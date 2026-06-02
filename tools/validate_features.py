@@ -65,6 +65,7 @@ def checks(args: argparse.Namespace) -> list[FeatureCheck]:
         FeatureCheck("STATE-3.33", "WELCOME_TALK keyword bank", [py, "tools/welcome_talk_smoke.py"], timeout_s=90),
         FeatureCheck("STATE-3.12", "WELCOME wave trigger", [py, "tools/welcome_wave_smoke.py"], timeout_s=90),
         FeatureCheck("STATE-3.29", "WELCOME_APPROACH dry run", [py, "tools/welcome_approach_smoke.py"]),
+        FeatureCheck("IF-STM32-013", "STM32 return/reset/arm command wrapper", [py, "tools/stm32_link_extensions_smoke.py"]),
         FeatureCheck("STATE-4", "DANCE dry run", [py, "tools/dance_smoke.py"]),
         FeatureCheck("STATE-1", "IDLE parser/runtime smoke", [py, "tools/idle_runtime_smoke.py"], hardware=True),
     ]

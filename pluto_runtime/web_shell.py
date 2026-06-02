@@ -1331,6 +1331,20 @@ def html_page() -> str:
       text-align: center;
       font-weight: 700;
     }}
+    .stageBox {{
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      margin: 12px 0;
+      overflow: hidden;
+    }}
+    #danceStage {{
+      width: 100%;
+      height: 100%;
+      display: block;
+    }}
     pre {{
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -1434,9 +1448,12 @@ def html_page() -> str:
         <div class="metric"><span class="label">Obstacles</span><span class="value" id="danceObstacles">unknown</span></div>
         <div class="metric"><span class="label">Vision</span><span class="value" id="danceVision">unknown</span></div>
         <div class="metric"><span class="label">Proposal</span><span class="value" id="danceProposal">stop</span></div>
-        <div class="metric"><span class="label">Envelope</span><span class="value" id="danceEnvelope">0 cm</span></div>
+        <div class="metric"><span class="label">Envelope</span><span class="value" id="danceEnvelope">unknown</span></div>
+        <div class="metric"><span class="label">Odometry</span><span class="value" id="danceOdom">unknown</span></div>
+        <div class="metric"><span class="label">Direction</span><span class="value" id="danceDirection">unknown</span></div>
         <div class="metric"><span class="label">Reason</span><span class="value" id="danceReason">not evaluated</span></div>
         <div class="metric"><span class="label">STOP Guard</span><span class="value" id="danceStop">none</span></div>
+        <div class="stageBox"><canvas id="danceStage" width="360" height="360"></canvas></div>
         <div class="actions" style="margin-top: 12px;">
           <button class="primary" id="danceStart">Start Dance Dry Run</button>
           <button id="danceStopBtn">Stop Dance</button>
@@ -1501,6 +1518,77 @@ def html_page() -> str:
       if (status === 'connected') return 'status-good';
       if (status === 'missing' || status === 'error') return 'status-bad';
       return 'status-warn';
+    }}
+    function drawDanceStage(dance) {{
+      const canvas = document.getElementById('danceStage');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, w, h);
+
+      const pad = 34;
+      const box = Math.min(w, h) - pad * 2;
+      const cx = w / 2;
+      const cy = h / 2;
+      const halfCm = Math.max(1, (dance.envelope_size_cm || 300) / 2);
+      const scale = box / (halfCm * 2);
+      const toPx = (xCm, yCm) => [cx + xCm * scale, cy - yCm * scale];
+
+      ctx.strokeStyle = '#24313d';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cx - box / 2, cy - box / 2, box, box);
+      ctx.fillStyle = '#24313d';
+      ctx.font = '12px ui-monospace, Consolas, monospace';
+      ctx.fillText('3m x 3m dance envelope', pad, 20);
+
+      ctx.strokeStyle = '#d3dbe3';
+      ctx.lineWidth = 1;
+      for (let i = -1; i <= 1; i++) {{
+        const x = cx + i * box / 3;
+        const y = cy + i * box / 3;
+        ctx.beginPath(); ctx.moveTo(x, cy - box / 2); ctx.lineTo(x, cy + box / 2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx - box / 2, y); ctx.lineTo(cx + box / 2, y); ctx.stroke();
+      }}
+
+      const x = Number(dance.estimated_x_cm || 0);
+      const y = Number(dance.estimated_y_cm || 0);
+      const px = Number(dance.predicted_x_cm || x);
+      const py = Number(dance.predicted_y_cm || y);
+      const [rx, ry] = toPx(x, y);
+      const [nx, ny] = toPx(px, py);
+
+      ctx.strokeStyle = '#0b84ff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(nx, ny);
+      ctx.stroke();
+
+      ctx.fillStyle = '#0b84ff';
+      ctx.beginPath();
+      ctx.arc(nx, ny, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#0f1720';
+      ctx.beginPath();
+      ctx.arc(rx, ry, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      const heading = ((Number(dance.heading_deg || 0) % 360) + 360) % 360;
+      const rad = (90 - heading) * Math.PI / 180;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx + Math.cos(rad) * 18, ry - Math.sin(rad) * 18);
+      ctx.stroke();
+
+      const margin = dance.envelope_margin_cm;
+      ctx.fillStyle = margin != null && margin < 20 ? '#b42318' : '#166534';
+      ctx.fillText(`margin ${{margin == null ? 'unknown' : margin.toFixed(0) + 'cm'}}`, pad, h - 14);
     }}
     function render(data) {{
       document.getElementById('state').textContent = data.current_state;
@@ -1593,10 +1681,16 @@ def html_page() -> str:
         `${{dance.vision_status || 'unknown'}} / ${{dance.vision_reason || 'not evaluated'}}`;
       document.getElementById('danceProposal').textContent =
         `${{dance.proposed_motion || 'stop'}} / speed ${{dance.proposed_speed || 0}} / steer ${{dance.proposed_steer || 0}}`;
-      document.getElementById('danceEnvelope').textContent = `${{dance.max_translation_cm || 0}} cm max`;
+      document.getElementById('danceEnvelope').textContent =
+        `${{dance.envelope_size_cm || 0}}x${{dance.envelope_size_cm || 0}} cm / margin ${{dance.envelope_margin_cm == null ? 'unknown' : dance.envelope_margin_cm.toFixed(0) + ' cm'}}`;
+      document.getElementById('danceOdom').textContent =
+        `${{dance.odometry_status || 'unknown'}} / ${{dance.heading_quadrant || 'unknown'}} / x ${{(dance.estimated_x_cm || 0).toFixed(0)}} y ${{(dance.estimated_y_cm || 0).toFixed(0)}}`;
+      document.getElementById('danceDirection').textContent =
+        `${{dance.direction_safety || 'unknown'}} / predicted x ${{(dance.predicted_x_cm || 0).toFixed(0)}} y ${{(dance.predicted_y_cm || 0).toFixed(0)}}`;
       document.getElementById('danceReason').textContent = dance.reason || 'not evaluated';
       document.getElementById('danceStop').textContent =
         danceStop.detail ? `${{danceStop.ok ? 'ok' : 'fail'}} / ${{danceStop.detail}}` : 'none';
+      drawDanceStage(dance);
       const talk = data.talk || {{}};
       const lastTalk = talk.last_result || null;
       document.getElementById('talkVersion').textContent = `${{talk.version || 'v1'}} / ${{talk.primary_engine || 'keyword'}}`;

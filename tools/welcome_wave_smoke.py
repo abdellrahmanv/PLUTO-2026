@@ -327,7 +327,7 @@ def main() -> int:
     proc = None
     if not args.external_server:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "pluto_runtime.web_shell", "--host", args.host, "--port", str(args.port)],
+            [sys.executable, "-m", "pluto_runtime.web_shell", "--host", args.host, "--port", str(args.port), "--wave-pose-disabled"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

@@ -45,7 +45,16 @@ def wait_ready() -> None:
 
 def main() -> int:
     proc = subprocess.Popen(
-        [sys.executable, "-m", "pluto_runtime.web_shell", "--host", HOST, "--port", str(PORT)],
+        [
+            sys.executable,
+            "-m",
+            "pluto_runtime.web_shell",
+            "--host",
+            HOST,
+            "--port",
+            str(PORT),
+            "--wave-pose-disabled",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

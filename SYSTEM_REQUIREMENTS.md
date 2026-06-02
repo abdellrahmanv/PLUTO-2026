@@ -926,13 +926,16 @@ while never leaving that envelope or sacrificing obstacle safety.
 | STATE-4.10 | DANCE shall play a preloaded audio file. | Pi | Audio test |
 | STATE-4.11 | DANCE shall use bounded motion patterns only. | Pi | Command log |
 | STATE-4.12 | DANCE shall treat the dance stage as a configured 3 m x 3 m floor envelope with 3 m vertical clearance in v1. | Pi + STM32 | Envelope config review |
+| STATE-4.12.1 | Website shall draw the 3 m x 3 m DANCE envelope, current odometry estimate, predicted next position, heading, and boundary margin. | Pi | Website status review |
+| STATE-4.12.2 | DANCE v1 shall assume the operator has provided an empty 3 m x 3 m stage before live motion is enabled. | Operator + Pi | Preflight checklist |
 | STATE-4.13 | DANCE shall use STM32 encoder odometry to estimate Pluto position inside the dance envelope. | Pi + STM32 | Odometry log |
 | STATE-4.14 | DANCE shall not command motion that intentionally leaves the 3 m x 3 m dance envelope. | Pi + STM32 | Boundary command test |
 | STATE-4.15 | DANCE shall continue STM32 heartbeat during audio playback. | Pi | Heartbeat log |
 | STATE-4.16 | DANCE arm movements shall remain inside DANCE arm limits. | Pi + STM32 | Arm bounds test |
 | STATE-4.17 | DANCE shall not command arm movement if arm subsystem is unavailable or unvalidated. | Pi | Hardware gate test |
 | STATE-4.18 | DANCE shall use Michael Jackson moonwalk-inspired backward/forward glide segments synchronized to the preloaded song when audio timing is available. | Pi | Dance sequence review |
-| STATE-4.19 | DANCE may change facing direction in 90 degree increments only when the new heading keeps Pluto inside the dance envelope. | Pi + STM32 | Heading command test |
+| STATE-4.18.1 | DANCE initial moonwalk segment values shall be conservative defaults, not final choreography: 60 cm backward and 45 cm forward are chosen to remain far inside the 3 m envelope while still visibly moving Pluto. | Pi | Config review |
+| STATE-4.19 | DANCE may change facing direction in slow 90 degree increments only when the new heading keeps Pluto inside the dance envelope. | Pi + STM32 | Heading command test |
 | STATE-4.19.1 | DANCE may move the NEMA arm with bounded stepper commands only after arm hardware validation passes. | Pi + STM32 | `CMD:ARM` log |
 | STATE-4.19.2 | DANCE shall record the current envelope estimate, heading quadrant, and odometry confidence for debugging. | Pi | Website/status review |
 

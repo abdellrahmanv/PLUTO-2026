@@ -49,7 +49,14 @@ def main() -> int:
     assert active.dry_run is True
     assert active.audio_status == "silent_dry_run"
     assert active.obstacle_status == "clear"
-    assert active.proposed_motion in {"stop", "glide_backward", "glide_forward", "arm_sway"}
+    assert active.envelope_size_cm == 300
+    assert active.vertical_clearance_cm == 300
+    assert active.odometry_status == "simulated_dry_run"
+    assert active.envelope_margin_cm is not None
+    assert active.envelope_margin_cm >= 0
+    assert active.heading_quadrant in {"north", "east", "south", "west"}
+    assert active.stage_assumption == "operator_verified_empty_3m_stage"
+    assert active.proposed_motion in {"stop", "glide_backward", "glide_forward", "turn_90_right", "arm_sway"}
 
     blocked = planner.compute(camera(), stm32(front=55), audio(), "DANCE", "DANCE_DRY_RUN", started)
     assert blocked.proposed_motion == "stop"
@@ -67,6 +74,33 @@ def main() -> int:
     low_light = planner.compute(camera(quality="low_light"), stm32(), audio(), "DANCE", "DANCE_DRY_RUN", started)
     assert low_light.proposed_motion == "stop"
     assert low_light.vision_status == "blocked"
+
+    edge = planner.compute(
+        camera(),
+        {"running": True, "telemetry": {"X": 0, "Y": -130, "H": 0}, "obstacles": {"F": 999, "FL": 999, "FR": 999}},
+        audio(),
+        "DANCE",
+        "DANCE_DRY_RUN",
+        time.time() - 1.0,
+    )
+    assert edge.proposed_motion == "stop"
+    assert edge.reason == "dance envelope boundary would be exceeded"
+
+    odom = planner.compute(
+        camera(),
+        {"running": True, "telemetry": {"X": 12, "Y": 15, "H": 90}, "obstacles": {"F": 999, "FL": 999, "FR": 999}},
+        audio(),
+        "DANCE",
+        "DANCE_DRY_RUN",
+        started,
+    )
+    assert odom.odometry_status == "stm32"
+    assert odom.heading_quadrant in {"east", "south"}
+
+    backward = planner.compute(camera(), stm32(), audio(), "DANCE", "DANCE_DRY_RUN", time.time() - 1.0)
+    assert backward.proposed_motion in {"stop", "glide_backward", "glide_forward", "turn_90_right", "arm_sway"}
+    if backward.proposed_motion == "glide_backward":
+        assert backward.direction_safety == "stage_clear_assumed_backward"
 
     no_silent = DanceDryRunPlanner(DanceConfig(silent_dry_run_allowed=False)).compute(
         camera(), stm32(), audio(speaker=False), "DANCE", "DANCE_DRY_RUN", started

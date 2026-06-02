@@ -12,6 +12,12 @@ clearance. Pluto may glide backward/forward, change direction in 90 degree
 increments, and move its arms, but it must never intentionally leave the
 envelope.
 
+The 60 cm backward and 45 cm forward segment defaults are not sacred
+choreography values. They are conservative engineering placeholders: visible
+enough for a 110 cm robot to look alive, but small enough to keep Pluto far
+inside a 300 cm dance envelope during early validation. These values can be
+tuned after dry-run evidence and wheels-lifted tests.
+
 ## Requirements Covered
 
 - STATE-4.1 through STATE-4.5: DANCE entry and STOP guard baseline.
@@ -44,11 +50,13 @@ The planner outputs `DanceStatus`, which is displayed under `/api/status` as
 The current dry-run sequence is deliberately small:
 
 ```text
-pose
-moonwalk_back
-hold
-return_forward
-hold
+pose_north
+moonwalk_back_north
+return_forward_north
+turn_right_90
+moonwalk_back_east
+return_forward_east
+turn_right_90
 arm_sway_left
 arm_sway_right
 ```
@@ -59,7 +67,7 @@ Future live DANCE should expand this into an envelope-aware sequence:
 1. Save dance origin and heading using encoder odometry.
 2. Treat origin +/- 150 cm on X/Y as the 3 m x 3 m dance box.
 3. Moonwalk backward and forward inside that box.
-4. Change direction only in 90 degree increments.
+4. Change direction only in slow 90 degree increments.
 5. Before each segment, predict whether odometry would leave the box.
 6. If the segment would leave the box, clamp it, rotate, or stop.
 7. If an obstacle is in the movement direction, stop that direction.
@@ -69,6 +77,43 @@ Future live DANCE should expand this into an envelope-aware sequence:
 Wheel proposals must never intentionally leave the envelope. Arm motion is
 reported as `disabled_until_arm_validated` until the stepper hardware and
 limits are proven.
+
+Implementation update:
+
+`DanceDryRunPlanner` now exposes envelope and odometry evidence directly in
+`DanceStatus`:
+
+```text
+envelope_size_cm
+vertical_clearance_cm
+envelope_margin_cm
+odometry_status
+odometry_reason
+odometry_confidence
+estimated_x_cm / estimated_y_cm
+predicted_x_cm / predicted_y_cm
+heading_deg / heading_quadrant
+direction_safety
+segment_distance_cm
+stage_assumption
+```
+
+If STM32 telemetry later exposes X/Y/heading fields, the planner uses those.
+Until then, dry-run uses a low-confidence simulated sequence estimate. Live
+DANCE must not use this simulated estimate as proof that physical motion is
+safe.
+
+Audio lookup order:
+
+```text
+1. PLUTO_DANCE_AUDIO environment variable.
+2. C:\Users\Asus\Downloads\Michael_Jackson_-_Billie_Jean_This_is_it_2009_(mp3.pm).mp3
+3. /home/pi/PLUTO-2026/audio/Michael_Jackson_-_Billie_Jean_This_is_it_2009_(mp3.pm).mp3
+4. /home/pi/Downloads/Michael_Jackson_-_Billie_Jean_This_is_it_2009_(mp3.pm).mp3
+```
+
+The repository does not store the song file. The Pi should receive a local copy
+or set `PLUTO_DANCE_AUDIO` to the actual file path.
 
 ## Safety Behavior
 
@@ -85,6 +130,9 @@ limits are proven.
 - Encoder odometry must be available and trusted before live dance can use the
   3 m x 3 m boundary. If odometry is invalid, live DANCE must stop or remain
   dry-run.
+- Backward moonwalk motion in v1 depends on a pre-cleared 3 m x 3 m stage
+  because the ultrasonic sensors are mostly front-facing. The website stage
+  drawing is required evidence that Pluto is staying inside that agreed box.
 
 ## Debugging Checklist
 
@@ -100,6 +148,11 @@ limits are proven.
    whether a human box is too large or clipped.
 9. If `dance.audio_status` is `silent_dry_run`, add/configure a preloaded dance
    audio file before live DANCE.
+10. If `dance.direction_safety` is `stage_clear_assumed_backward`, remember
+    that the backward segment is allowed only because the operator has provided
+    an empty 3 m x 3 m dance stage and the odometry envelope remains valid.
+11. Inspect the website dance-stage drawing. Current pose, predicted next pose,
+    heading arrow, and margin must look reasonable before any future live test.
 
 ## Verification
 

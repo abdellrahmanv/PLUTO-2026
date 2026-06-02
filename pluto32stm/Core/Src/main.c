@@ -71,6 +71,7 @@ typedef struct {
 #define OBSTACLE_SLOW_CM    100
 #define PI_TIMEOUT_MS       1000
 #define HOME_THRESHOLD_CM   15
+#define RETURN_SPEED        -25
 #define BAT_MIN_VOLTAGE     34.0f
 #define HB_ERROR_MAX        3
 
@@ -469,7 +470,7 @@ void navigateToHome(void) {
   if (steer >  300) steer =  300;
   if (steer < -300) steer = -300;
 
-  int16_t speed = -150;
+  int16_t speed = RETURN_SPEED;
 
   if (obstacleAhead()) {
     speed = 0;
@@ -558,13 +559,22 @@ void readRPi(void) {
 
 // ── Telemetry to RPi ────────────────────────────────────────
 void sendTelemetry(void) {
-  char buf[128];
+  char buf[192];
+  float headingDeg = heading * 57.29578f;
+  while (headingDeg >  180.0f) headingDeg -= 360.0f;
+  while (headingDeg < -180.0f) headingDeg += 360.0f;
+
   snprintf(buf, sizeof(buf),
-    "TEL:BAT:%.1f,SPD:%.1f,DIST:%.0f,TEMP:%.1f\r\n",
+    "TEL:BAT:%.1f,SPD:%.1f,DIST:%.0f,TEMP:%.1f,X:%.1f,Y:%.1f,H:%.1f,HOME:%.1f,RET:%u\r\n",
     batV,
     fabsf((float)cmdSpeed) * 0.036f,
     distCm,
-    tmpC);
+    tmpC,
+    posX,
+    posY,
+    headingDeg,
+    distanceToHome(),
+    returning);
   sendUSB(buf);
 
   snprintf(buf, sizeof(buf),

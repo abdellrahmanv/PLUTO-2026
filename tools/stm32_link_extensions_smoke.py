@@ -276,9 +276,14 @@ def test_existing_acks_still_work() -> None:
 def test_telemetry_and_obs_still_work() -> None:
     """TEL: and OBS: lines must still parse correctly."""
     link = Stm32SerialLink("COM_FAKE", baud=115200)
-    link._handle_line("TEL:BAT:36.2,SPD:0.0,DIST:0,TEMP:28.5")
+    link._handle_line("TEL:BAT:36.2,SPD:0.0,DIST:0,TEMP:28.5,X:12.5,Y:-4.0,H:90.0,HOME:15.2,RET:1")
     assert link._status.telemetry.get("BAT") == 36.2
     assert link._status.telemetry.get("SPD") == 0.0
+    assert link._status.telemetry.get("X") == 12.5
+    assert link._status.telemetry.get("Y") == -4.0
+    assert link._status.telemetry.get("H") == 90.0
+    assert link._status.telemetry.get("HOME") == 15.2
+    assert link._status.telemetry.get("RET") == 1.0
     link._handle_line("OBS:FL:120,F:95,FR:200")
     assert link._status.obstacles.get("F") == 95.0
     assert link._status.obstacles.get("FL") == 120.0

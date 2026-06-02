@@ -22,6 +22,7 @@ Implemented a robust serial command transmission structure with direct command l
 ## Interfaces
 - Commands: `CMD:RETURN`, `CMD:RESET_HOME`, `CMD:ARM:<steps>,<speed>`, `CMD:STOP`, `CMD:DRIVE:<speed>,<steer>`
 - ACKs: `ACK:RETURN`, `ACK:RETURN_COMPLETE`, `ACK:RESET_HOME`, `ACK:ARM`, `ACK:ARM_DONE`
+- Telemetry: `TEL:BAT,SPD,DIST,TEMP,X,Y,H,HOME,RET`
 - Pi Runtime API: `Stm32SerialLink` exposes methods `send_return()`, `send_reset_home()`, and `send_arm()`.
 
 ## Runtime Behavior
@@ -29,6 +30,12 @@ Implemented a robust serial command transmission structure with direct command l
 - On receipt of `ACK:RETURN_COMPLETE`, `return_active` transitions to `False` and `return_complete` becomes `True`.
 - Interruption: `send_stop()` or `send_drive()` sets `return_active` to `False` to signal the return process was preempted.
 - `send_arm()` resets `arm_done = False`. When NEMA stepper finishes motion, `ACK:ARM_DONE` transitions `arm_done` to `True`.
+- STM32 telemetry now exposes odometry fields:
+  - `X`, `Y`: current estimated position in centimeters.
+  - `H`: heading in degrees.
+  - `HOME`: distance to saved home in centimeters.
+  - `RET`: `1` when STM32 return-to-home is active, otherwise `0`.
+- STM32 return speed is bounded by `RETURN_SPEED = -25` instead of the previous hardcoded `-150`, matching the requirement that return speed shall be less than or equal to approach speed.
 
 ## Configuration
 None.
@@ -46,6 +53,12 @@ python tools/stm32_link_extensions_smoke.py
 
 ## Expected Evidence
 Logs or state changes including `ACK:RETURN`, `ACK:RETURN_COMPLETE`, `ACK:RESET_HOME`, `ACK:ARM`, and `ACK:ARM_DONE` in serial link telemetry output.
+
+Example telemetry:
+
+```text
+TEL:BAT:36.2,SPD:0.0,DIST:0,TEMP:28.5,X:12.5,Y:-4.0,H:90.0,HOME:15.2,RET:1
+```
 
 ## Verification Tests
 Verified via:
@@ -67,3 +80,4 @@ None for Phase 1.
 
 ## Change History
 - 2026-05-30: Refactored stm32_link_extensions feature memory to use the official SYSTEM_REQUIREMENTS template and correct requirement IDs IF-STM32-013 through IF-STM32-015 by Antigravity.
+- 2026-05-30: Added STM32 odometry telemetry fields and bounded firmware return speed for return/dance planning evidence.
