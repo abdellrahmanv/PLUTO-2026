@@ -235,7 +235,12 @@ uint32_t micros(void) {
 
 // ── Send string via USB CDC ─────────────────────────────────
 void sendUSB(const char* msg) {
-  CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
+  for (uint8_t attempt = 0; attempt < 10; attempt++) {
+    if (CDC_Transmit_FS((uint8_t*)msg, strlen(msg)) == USBD_OK) {
+      return;
+    }
+    HAL_Delay(1);
+  }
 }
 
 // ── Hoverboard FOC — send command ───────────────────────────
@@ -566,16 +571,16 @@ void parseCommand(char* cmd) {
     int32_t  steps = atol(p);
     char*    comma = strchr(p, ',');
     uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-    stepperMove(1, steps, spd);
     sendUSB("ACK:ARM\r\n");
+    stepperMove(1, steps, spd);
   }
   else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
     char*    p     = cmd + 9;
     int32_t  steps = atol(p);
     char*    comma = strchr(p, ',');
     uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-    stepperMove(2, steps, spd);
     sendUSB("ACK:ARM2\r\n");
+    stepperMove(2, steps, spd);
   }
   else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
     returning = 1;
