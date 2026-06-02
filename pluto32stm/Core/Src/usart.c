@@ -21,10 +21,10 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-extern UART_HandleTypeDef huart1;
 
 /* USER CODE END 0 */
 
+UART_HandleTypeDef huart1;
 
 /* USART1 init function */
 

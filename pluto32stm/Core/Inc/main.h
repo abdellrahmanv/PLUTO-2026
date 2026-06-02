@@ -57,6 +57,12 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define ARM2_STEP_Pin GPIO_PIN_12
+#define ARM2_STEP_GPIO_Port GPIOB
+#define ARM2_DIR_Pin GPIO_PIN_13
+#define ARM2_DIR_GPIO_Port GPIOB
+#define ARM2_EN_Pin GPIO_PIN_14
+#define ARM2_EN_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
