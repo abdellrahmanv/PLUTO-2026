@@ -637,9 +637,12 @@ chain before autonomous behavior is added.
 | --- | --- | --- | --- |
 | STATE-2.12.1 | Pi shall clamp speed to configured manual maximum. | Pi | Boundary test |
 | STATE-2.12.2 | Pi shall clamp steer to configured manual maximum. | Pi | Boundary test |
-| STATE-2.12.3 | Pi shall support a low-speed test limit for first hoverboard validation. | Pi | Config test |
-| STATE-2.12.4 | Pi shall log every nonzero drive command with timestamp. | Pi | Log review |
-| STATE-2.12.5 | Pi shall not send movement commands if STM32 identity is unknown. | Pi | Serial probe test |
+| STATE-2.12.3 | MANUAL website shall allow the operator to vary base speed and steer within configured limits. | Pi + Website | Website control test |
+| STATE-2.12.4 | Pi shall support a low-speed test limit for first hoverboard validation. | Pi | Config test |
+| STATE-2.12.5 | Pi shall log every nonzero drive command with timestamp. | Pi | Log review |
+| STATE-2.12.6 | Pi shall not send movement commands if STM32 identity is unknown. | Pi | Serial probe test |
+| STATE-2.12.7 | MANUAL website shall allow bounded variable NEMA arm step and speed commands for arm 1 and arm 2. | Pi + Website + STM32 | Arm command boundary test |
+| STATE-2.12.8 | MANUAL arm commands shall be click-to-step commands and shall not repeat automatically while held. | Pi + Website | Arm input safety test |
 
 ### Safety Behavior Requirements
 
@@ -1123,7 +1126,7 @@ GAME_LATER is not implemented in v1.
 | --- | --- | --- | --- | --- | --- |
 | BOOTSTRAP | `CMD:PING`, `CMD:STOP` | `ID`, `ACK`, `TEL`, `OBS`, `ALERT` | `ID?` or probe, optional `MODE:BOOT` | show bootstrap report if available | OS packages, Python env, serial devices, camera, audio |
 | IDLE | `CMD:PING`, `CMD:STOP` | `ID`, `TEL`, `OBS`, `ALERT` | `MODE:IDLE`, `FACE:IDLE` | camera feed/status, current state, allowed next states | optional low-rate camera |
-| MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | manual controls, telemetry, emergency stop | operator controls |
+| MANUAL | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, optional `CMD:ARM`, optional `CMD:ARM2` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:MANUAL`, `WARN` | manual controls, variable base speed, variable arm controls, telemetry, emergency stop | operator controls |
 | WELCOME | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, `CMD:RETURN`, `CMD:RESET_HOME` | `ACK`, `TEL`, `OBS`, `ALERT` | `MODE:WELCOME`, `FACE:HAPPY`, `TEXT` | current substate, return lock status, emergency stop | vision/speech/crowd target |
 | DANCE | `CMD:PING`, `CMD:DRIVE`, `CMD:STOP`, optional `CMD:ARM` | `ACK`, `OBS`, `ALERT` | `MODE:DANCE`, `FACE:DANCE` | dance start/stop/status, emergency stop | audio file, operator start |
 | ERROR | `CMD:STOP`, `CMD:PING` | `ID`, `TEL`, `ALERT` | `MODE:ERROR`, `WARN` | fault reason, diagnostics, allowed recovery | reset request |

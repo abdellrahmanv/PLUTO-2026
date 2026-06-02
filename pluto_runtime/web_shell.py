@@ -90,9 +90,16 @@ class ManualRuntime:
     steer_intent: int = 0
     max_speed: int = 80
     max_steer: int = 80
+    base_speed_setting: int = 80
+    base_steer_setting: int = 80
+    arm_step_setting: int = 100
+    arm_speed_setting: int = 200
+    max_arm_steps: int = 1200
+    max_arm_speed: int = 1000
     command_period_ms: int = 150
     last_command_at: float | None = None
     last_release_at: float | None = None
+    last_arm_command: dict[str, Any] = field(default_factory=dict)
     last_result: dict[str, Any] = field(default_factory=dict)
     command_count: int = 0
     blocked_reason: str | None = None
@@ -615,6 +622,49 @@ class PlutoWebContext:
             "serial": serial_result,
             "blocked_reason": self.manual.blocked_reason,
         }
+
+    def manual_arm(self, arm: int, steps: int, speed: int) -> dict[str, Any]:
+        if self.mode_manager.current_state != "MANUAL" or not self.manual.enabled:
+            result = {"accepted": False, "reason": "manual arm controls are only active in MANUAL"}
+            self.manual.blocked_reason = result["reason"]
+            self.log("warn", f"Manual arm rejected: {result['reason']}")
+            return result
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            result = {"accepted": False, "reason": "STM32 unavailable"}
+            self.manual.blocked_reason = result["reason"]
+            self.mode_manager.enter_error("STM32 unavailable during MANUAL arm", source="manual_arm")
+            self.log("error", "Manual arm rejected: STM32 unavailable")
+            return result
+
+        arm_num = 2 if int(arm) == 2 else 1
+        step_limit = max(1, int(self.manual.max_arm_steps))
+        speed_limit = max(1, int(self.manual.max_arm_speed))
+        clamped_steps = self.clamp(int(steps), step_limit)
+        clamped_speed = max(1, min(speed_limit, int(speed)))
+
+        started = time.monotonic()
+        if arm_num == 2:
+            serial_result = self.stm32_link.send_arm2(clamped_steps, clamped_speed)
+        else:
+            serial_result = self.stm32_link.send_arm(clamped_steps, clamped_speed)
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+
+        result = {
+            "accepted": bool(serial_result["ok"]),
+            "arm": arm_num,
+            "steps": clamped_steps,
+            "speed": clamped_speed,
+            "elapsed_ms": elapsed_ms,
+            "serial": serial_result,
+        }
+        self.manual.arm_step_setting = abs(clamped_steps) or self.manual.arm_step_setting
+        self.manual.arm_speed_setting = clamped_speed
+        self.manual.last_command_at = time.time()
+        self.manual.command_count += 1
+        self.manual.last_arm_command = result
+        self.manual.last_result = serial_result
+        self.log("drive", f"MANUAL arm{arm_num} steps={clamped_steps} speed={clamped_speed} result={serial_result['detail']}")
+        return result
 
     def manual_stop(self) -> dict[str, Any]:
         self.manual.speed_intent = 0
@@ -1290,6 +1340,48 @@ def html_page() -> str:
       grid-column: span 3;
       aspect-ratio: auto;
     }}
+    .manual-controls {{
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      max-width: 520px;
+    }}
+    .manual-control-row {{
+      display: grid;
+      grid-template-columns: 96px minmax(120px, 1fr) 54px;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+    }}
+    .manual-control-row input[type="range"] {{
+      width: 100%;
+    }}
+    .manual-arm-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(70px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .manual-arm-settings {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(110px, 1fr));
+      gap: 10px;
+    }}
+    .manual-arm-settings label {{
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .manual-arm-settings input {{
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      color: var(--ink);
+    }}
     .talk-row {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto auto auto;
@@ -1448,10 +1540,39 @@ def html_page() -> str:
         <div class="metric"><span class="label">Intent</span><span class="value" id="manualIntent">0,0</span></div>
         <div class="metric"><span class="label">Limit</span><span class="value" id="manualLimit">...</span></div>
         <div class="metric"><span class="label">Blocked</span><span class="value" id="manualBlocked">none</span></div>
+        <div class="metric"><span class="label">Arm Last</span><span class="value" id="manualArmLast">none</span></div>
+        <div class="manual-controls">
+          <div class="manual-control-row">
+            <label for="manualBaseSpeed">Base speed</label>
+            <input id="manualBaseSpeed" type="range" min="0" max="80" step="1" value="80">
+            <span id="manualBaseSpeedValue">80</span>
+          </div>
+          <div class="manual-control-row">
+            <label for="manualBaseSteer">Base steer</label>
+            <input id="manualBaseSteer" type="range" min="0" max="80" step="1" value="80">
+            <span id="manualBaseSteerValue">80</span>
+          </div>
+        </div>
         <div class="manual-pad" id="manualPad">
-          <span></span><button data-speed="80" data-steer="0">Forward</button><span></span>
-          <button data-speed="0" data-steer="-80">Left</button><button class="danger" id="manualStop">Stop</button><button data-speed="0" data-steer="80">Right</button>
-          <span></span><button data-speed="-80" data-steer="0">Back</button><span></span>
+          <span></span><button data-motion="forward">Forward</button><span></span>
+          <button data-motion="left">Left</button><button class="danger" id="manualStop">Stop</button><button data-motion="right">Right</button>
+          <span></span><button data-motion="back">Back</button><span></span>
+        </div>
+        <div class="manual-controls">
+          <div class="manual-arm-settings">
+            <label>Arm steps
+              <input id="manualArmSteps" type="number" min="1" max="1200" step="10" value="100">
+            </label>
+            <label>Arm speed
+              <input id="manualArmSpeed" type="number" min="1" max="1000" step="10" value="200">
+            </label>
+          </div>
+          <div class="manual-arm-grid">
+            <button data-arm="1" data-arm-dir="1">Arm1 +</button>
+            <button data-arm="1" data-arm-dir="-1">Arm1 -</button>
+            <button data-arm="2" data-arm-dir="1">Arm2 +</button>
+            <button data-arm="2" data-arm-dir="-1">Arm2 -</button>
+          </div>
         </div>
       </section>
       <section class="span-6">
@@ -1680,10 +1801,35 @@ def html_page() -> str:
       document.getElementById('manualIntent').textContent = `${{manual.speed_intent || 0}}, ${{manual.steer_intent || 0}}`;
       document.getElementById('manualLimit').textContent = `${{manual.max_speed || 0}} speed / ${{manual.max_steer || 0}} steer`;
       document.getElementById('manualBlocked').textContent = manual.blocked_reason || 'none';
-      document.querySelectorAll('#manualPad button[data-speed]').forEach(btn => {{
+      const baseSpeed = document.getElementById('manualBaseSpeed');
+      const baseSteer = document.getElementById('manualBaseSteer');
+      baseSpeed.max = manual.max_speed || 80;
+      baseSteer.max = manual.max_steer || 80;
+      if (document.activeElement !== baseSpeed) baseSpeed.value = manual.base_speed_setting || manual.max_speed || 80;
+      if (document.activeElement !== baseSteer) baseSteer.value = manual.base_steer_setting || manual.max_steer || 80;
+      document.getElementById('manualBaseSpeedValue').textContent = baseSpeed.value;
+      document.getElementById('manualBaseSteerValue').textContent = baseSteer.value;
+      const armSteps = document.getElementById('manualArmSteps');
+      const armSpeed = document.getElementById('manualArmSpeed');
+      armSteps.max = manual.max_arm_steps || 1200;
+      armSpeed.max = manual.max_arm_speed || 1000;
+      if (document.activeElement !== armSteps) armSteps.value = manual.arm_step_setting || 100;
+      if (document.activeElement !== armSpeed) armSpeed.value = manual.arm_speed_setting || 200;
+      const lastArm = manual.last_arm_command || null;
+      document.getElementById('manualArmLast').textContent = lastArm && lastArm.arm
+        ? `arm${{lastArm.arm}} ${{lastArm.steps}} steps @ ${{lastArm.speed}}`
+        : 'none';
+      document.querySelectorAll('#manualPad button[data-motion]').forEach(btn => {{
         btn.disabled = !manual.enabled;
       }});
       document.getElementById('manualStop').disabled = !manual.enabled;
+      document.querySelectorAll('[data-arm]').forEach(btn => {{
+        btn.disabled = !manual.enabled;
+      }});
+      baseSpeed.disabled = !manual.enabled;
+      baseSteer.disabled = !manual.enabled;
+      armSteps.disabled = !manual.enabled;
+      armSpeed.disabled = !manual.enabled;
       const dance = data.dance || {{}};
       const danceStop = dance.stop_guard || {{}};
       document.getElementById('danceMode').textContent =
@@ -1789,11 +1935,44 @@ def html_page() -> str:
       await refresh();
     }}));
     let manualTimer = null;
+    function numericInput(id, fallback, minValue, maxValue) {{
+      const node = document.getElementById(id);
+      const raw = Number(node.value);
+      const value = Number.isFinite(raw) ? raw : fallback;
+      return Math.max(minValue, Math.min(maxValue, Math.round(value)));
+    }}
+    function updateManualLabels() {{
+      document.getElementById('manualBaseSpeedValue').textContent = document.getElementById('manualBaseSpeed').value;
+      document.getElementById('manualBaseSteerValue').textContent = document.getElementById('manualBaseSteer').value;
+    }}
+    function manualMotionIntent(motion) {{
+      const speedMax = Number(document.getElementById('manualBaseSpeed').max || 80);
+      const steerMax = Number(document.getElementById('manualBaseSteer').max || 80);
+      const speed = numericInput('manualBaseSpeed', 80, 0, speedMax);
+      const steer = numericInput('manualBaseSteer', 80, 0, steerMax);
+      if (motion === 'forward') return {{speed, steer: 0}};
+      if (motion === 'back') return {{speed: -speed, steer: 0}};
+      if (motion === 'left') return {{speed: 0, steer: -steer}};
+      if (motion === 'right') return {{speed: 0, steer}};
+      return {{speed: 0, steer: 0}};
+    }}
     async function manualDrive(speed, steer) {{
       await api('/api/manual/drive', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{speed, steer}})
+      }});
+      await refresh();
+    }}
+    async function manualArm(arm, direction) {{
+      const maxSteps = Number(document.getElementById('manualArmSteps').max || 1200);
+      const maxSpeed = Number(document.getElementById('manualArmSpeed').max || 1000);
+      const steps = numericInput('manualArmSteps', 100, 1, maxSteps) * direction;
+      const speed = numericInput('manualArmSpeed', 200, 1, maxSpeed);
+      await api('/api/manual/arm', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{arm, steps, speed}})
       }});
       await refresh();
     }}
@@ -1805,17 +1984,26 @@ def html_page() -> str:
       await api('/api/manual/stop', {{method: 'POST'}});
       await refresh();
     }}
-    document.querySelectorAll('#manualPad button[data-speed]').forEach(btn => {{
+    document.getElementById('manualBaseSpeed').addEventListener('input', updateManualLabels);
+    document.getElementById('manualBaseSteer').addEventListener('input', updateManualLabels);
+    document.querySelectorAll('#manualPad button[data-motion]').forEach(btn => {{
       const start = async (event) => {{
         event.preventDefault();
-        const speed = Number(btn.dataset.speed);
-        const steer = Number(btn.dataset.steer);
+        const {{speed, steer}} = manualMotionIntent(btn.dataset.motion);
         if (manualTimer) clearInterval(manualTimer);
         await manualDrive(speed, steer);
-        manualTimer = setInterval(() => manualDrive(speed, steer).catch(console.error), 150);
+        manualTimer = setInterval(() => {{
+          const intent = manualMotionIntent(btn.dataset.motion);
+          manualDrive(intent.speed, intent.steer).catch(console.error);
+        }}, 150);
       }};
       btn.addEventListener('mousedown', start);
       btn.addEventListener('touchstart', start, {{passive: false}});
+    }});
+    document.querySelectorAll('[data-arm]').forEach(btn => {{
+      btn.addEventListener('click', async () => {{
+        await manualArm(Number(btn.dataset.arm), Number(btn.dataset.armDir));
+      }});
     }});
     ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(name => {{
       document.addEventListener(name, () => {{
@@ -2027,6 +2215,17 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(
                     HTTPStatus.OK,
                     self.context.manual_drive(int(body.get("speed", 0)), int(body.get("steer", 0))),
+                )
+                return
+            if path == "/api/manual/arm":
+                body = self.read_json()
+                self.send_json(
+                    HTTPStatus.OK,
+                    self.context.manual_arm(
+                        int(body.get("arm", 1)),
+                        int(body.get("steps", 0)),
+                        int(body.get("speed", 0)),
+                    ),
                 )
                 return
             if path == "/api/manual/stop":

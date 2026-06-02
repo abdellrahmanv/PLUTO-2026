@@ -65,12 +65,24 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
     assert drive["accepted"] is False
     assert "only active in MANUAL" in drive["reason"]
 
+    arm_code, arm_raw = request(base, "/api/manual/arm", "POST", {"arm": 1, "steps": 100, "speed": 200})
+    assert arm_code == 200, arm_code
+    arm = json.loads(arm_raw.decode("utf-8"))
+    assert arm["accepted"] is False
+    assert "only active in MANUAL" in arm["reason"]
+
     status_code, raw_status = request(base, "/api/status")
     assert status_code == 200, status_code
     status = json.loads(raw_status.decode("utf-8"))
     assert "manual" in status
     assert status["manual"]["max_speed"] == 80
     assert status["manual"]["max_steer"] == 80
+    assert status["manual"]["base_speed_setting"] == 80
+    assert status["manual"]["base_steer_setting"] == 80
+    assert status["manual"]["arm_step_setting"] == 100
+    assert status["manual"]["arm_speed_setting"] == 200
+    assert status["manual"]["max_arm_steps"] == 1200
+    assert status["manual"]["max_arm_speed"] == 1000
 
     if hardware_zero_drive and status["hardware"]["stm32"]["connected"]:
         if status["current_state"] == "ERROR":

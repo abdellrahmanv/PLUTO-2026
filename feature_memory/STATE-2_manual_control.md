@@ -31,6 +31,9 @@ STATE-2.12.2
 STATE-2.12.3
 STATE-2.12.4
 STATE-2.12.5
+STATE-2.12.6
+STATE-2.12.7
+STATE-2.12.8
 STATE-2.20
 STATE-2.21
 STATE-2.23
@@ -111,6 +114,7 @@ The raw `/api/drive` route remains intentionally missing. Manual movement uses:
 
 ```text
 POST /api/manual/drive
+POST /api/manual/arm
 POST /api/manual/stop
 ```
 
@@ -129,17 +133,30 @@ Hold-to-move behavior:
 
 1. Operator presses and holds a direction button.
 2. Browser sends repeated `/api/manual/drive` requests every 150 ms.
-3. Server clamps speed and steer to configured limits.
-4. Server sends `CMD:DRIVE:<speed>,<steer>` to STM32.
-5. STM32 replies `ACK:DRIVE`.
-6. Releasing pointer/touch sends `/api/manual/stop`.
-7. Server sends `CMD:STOP`.
+3. Browser reads the current base speed and steer sliders before each repeat.
+4. Server clamps speed and steer to configured limits.
+5. Server sends `CMD:DRIVE:<speed>,<steer>` to STM32.
+6. STM32 replies `ACK:DRIVE`.
+7. Releasing pointer/touch sends `/api/manual/stop`.
+8. Server sends `CMD:STOP`.
+
+Arm click-to-step behavior:
+
+1. Operator selects arm steps and arm speed.
+2. Operator clicks Arm1 +, Arm1 -, Arm2 +, or Arm2 -.
+3. Browser sends one `/api/manual/arm` request.
+4. Server clamps steps to `max_arm_steps` and speed to `max_arm_speed`.
+5. Server sends `CMD:ARM:<steps>,<speed>` or `CMD:ARM2:<steps>,<speed>`.
+6. Arm commands do not auto-repeat while held.
+7. Website records the last arm command for debugging.
 
 Blocked behavior:
 
 - `/api/manual/drive` outside MANUAL is rejected.
+- `/api/manual/arm` outside MANUAL is rejected.
 - Raw `/api/drive` stays unavailable.
 - Manual drive is rejected if STM32 is unavailable.
+- Manual arm is rejected if STM32 is unavailable.
 - Forward intent is clamped to zero if obstacle telemetry is below stop threshold.
 - Emergency stop enters `ERROR`.
 
@@ -149,6 +166,10 @@ Blocked behavior:
 | --- | --- | --- |
 | Manual max speed | `80` | Low-speed first hoverboard validation |
 | Manual max steer | `80` | Low turn rate for first validation |
+| Base speed slider | `0..80` | Operator can tune base motion without code edits |
+| Base steer slider | `0..80` | Operator can tune turn motion without code edits |
+| Arm step setting | `100` default, `1200` max | Bounded click-to-step arm testing |
+| Arm speed setting | `200` default, `1000` max | Variable NEMA speed testing |
 | Command repeat period | `150 ms` | Meets manual latency target while avoiding serial spam |
 | Obstacle forward block | `< 60 cm` | Matches STM32 obstacle stop baseline |
 
@@ -162,10 +183,19 @@ Inputs:
   - Left.
   - Right.
   - Stop.
+- Website variable controls:
+  - Base speed slider.
+  - Base steer slider.
+  - Arm steps input.
+  - Arm speed input.
+  - Arm1 + / Arm1 -.
+  - Arm2 + / Arm2 -.
 
 Outputs:
 
 - `CMD:DRIVE:<speed>,<steer>`.
+- `CMD:ARM:<steps>,<speed>`.
+- `CMD:ARM2:<steps>,<speed>`.
 - `CMD:STOP`.
 - Manual status in `/api/status.manual`.
 - STM32 drive counters in `/api/status.stm32_runtime`.
@@ -178,7 +208,10 @@ The website now includes a `Manual Control` panel showing:
 - speed/steer intent.
 - configured limits.
 - blocked reason.
+- variable base speed and steer controls.
 - hold-to-move direction buttons.
+- bounded arm 1 and arm 2 step/speed controls.
+- last arm command.
 - stop button.
 
 ## How To Run
@@ -216,10 +249,12 @@ Wheels-lifted validation:
 | --- | --- | --- | --- |
 | PHASE7-MANUAL-001 | Request raw `/api/drive` | `404` | local pass |
 | PHASE7-MANUAL-002 | Request manual drive outside MANUAL | rejected | local pass |
-| PHASE7-MANUAL-003 | Inspect `/api/status.manual` | limits and state visible | local pass |
-| PHASE7-MANUAL-004 | Enter MANUAL with STM32 | stop guard sent and manual enabled | awaiting Pi validation |
-| PHASE7-MANUAL-005 | Send zero manual drive in MANUAL | `ACK:DRIVE`, no movement intent | awaiting Pi validation |
-| PHASE7-MANUAL-006 | Hold forward with wheels lifted | repeated `CMD:DRIVE`, release sends `CMD:STOP` | not run |
+| PHASE7-MANUAL-003 | Request manual arm outside MANUAL | rejected | local pass |
+| PHASE7-MANUAL-004 | Inspect `/api/status.manual` | base and arm limits visible | local pass |
+| PHASE7-MANUAL-005 | Enter MANUAL with STM32 | stop guard sent and manual enabled | awaiting Pi validation |
+| PHASE7-MANUAL-006 | Send zero manual drive in MANUAL | `ACK:DRIVE`, no movement intent | awaiting Pi validation |
+| PHASE7-MANUAL-007 | Hold forward with wheels lifted | repeated `CMD:DRIVE`, release sends `CMD:STOP` | not run |
+| PHASE7-MANUAL-008 | Click Arm1/Arm2 with wheels and arms isolated | one bounded `CMD:ARM` or `CMD:ARM2` per click | not run |
 
 ## Failure Modes
 
