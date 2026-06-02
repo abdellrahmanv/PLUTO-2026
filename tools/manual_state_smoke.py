@@ -75,9 +75,9 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
     assert status_code == 200, status_code
     status = json.loads(raw_status.decode("utf-8"))
     assert "manual" in status
-    assert status["manual"]["max_speed"] == 80
+    assert status["manual"]["max_speed"] == 150
     assert status["manual"]["max_steer"] == 80
-    assert status["manual"]["base_speed_setting"] == 80
+    assert status["manual"]["base_speed_setting"] == 150
     assert status["manual"]["base_steer_setting"] == 80
     assert status["manual"]["arm_step_setting"] == 100
     assert status["manual"]["arm_speed_setting"] == 200

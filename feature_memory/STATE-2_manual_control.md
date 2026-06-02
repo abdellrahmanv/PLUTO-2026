@@ -164,9 +164,9 @@ Blocked behavior:
 
 | Name | Default | Reason |
 | --- | --- | --- |
-| Manual max speed | `80` | Low-speed first hoverboard validation |
+| Manual max speed | `150` | Operator-tunable base speed limit for MANUAL |
 | Manual max steer | `80` | Low turn rate for first validation |
-| Base speed slider | `0..80` | Operator can tune base motion without code edits |
+| Base speed slider | `0..150` | Operator can tune base motion without code edits |
 | Base steer slider | `0..80` | Operator can tune turn motion without code edits |
 | Arm step setting | `100` default, `1200` max | Bounded click-to-step arm testing |
 | Arm speed setting | `200` default, `1000` max | Variable NEMA speed testing |

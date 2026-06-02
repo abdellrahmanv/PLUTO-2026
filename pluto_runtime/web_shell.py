@@ -88,9 +88,9 @@ class ManualRuntime:
     enabled: bool = False
     speed_intent: int = 0
     steer_intent: int = 0
-    max_speed: int = 80
+    max_speed: int = 150
     max_steer: int = 80
-    base_speed_setting: int = 80
+    base_speed_setting: int = 150
     base_steer_setting: int = 80
     arm_step_setting: int = 100
     arm_speed_setting: int = 200
@@ -1544,8 +1544,8 @@ def html_page() -> str:
         <div class="manual-controls">
           <div class="manual-control-row">
             <label for="manualBaseSpeed">Base speed</label>
-            <input id="manualBaseSpeed" type="range" min="0" max="80" step="1" value="80">
-            <span id="manualBaseSpeedValue">80</span>
+            <input id="manualBaseSpeed" type="range" min="0" max="150" step="1" value="150">
+            <span id="manualBaseSpeedValue">150</span>
           </div>
           <div class="manual-control-row">
             <label for="manualBaseSteer">Base steer</label>
@@ -1803,9 +1803,9 @@ def html_page() -> str:
       document.getElementById('manualBlocked').textContent = manual.blocked_reason || 'none';
       const baseSpeed = document.getElementById('manualBaseSpeed');
       const baseSteer = document.getElementById('manualBaseSteer');
-      baseSpeed.max = manual.max_speed || 80;
+      baseSpeed.max = manual.max_speed || 150;
       baseSteer.max = manual.max_steer || 80;
-      if (document.activeElement !== baseSpeed) baseSpeed.value = manual.base_speed_setting || manual.max_speed || 80;
+      if (document.activeElement !== baseSpeed) baseSpeed.value = manual.base_speed_setting || manual.max_speed || 150;
       if (document.activeElement !== baseSteer) baseSteer.value = manual.base_steer_setting || manual.max_steer || 80;
       document.getElementById('manualBaseSpeedValue').textContent = baseSpeed.value;
       document.getElementById('manualBaseSteerValue').textContent = baseSteer.value;
@@ -1946,9 +1946,9 @@ def html_page() -> str:
       document.getElementById('manualBaseSteerValue').textContent = document.getElementById('manualBaseSteer').value;
     }}
     function manualMotionIntent(motion) {{
-      const speedMax = Number(document.getElementById('manualBaseSpeed').max || 80);
+      const speedMax = Number(document.getElementById('manualBaseSpeed').max || 150);
       const steerMax = Number(document.getElementById('manualBaseSteer').max || 80);
-      const speed = numericInput('manualBaseSpeed', 80, 0, speedMax);
+      const speed = numericInput('manualBaseSpeed', 150, 0, speedMax);
       const steer = numericInput('manualBaseSteer', 80, 0, steerMax);
       if (motion === 'forward') return {{speed, steer: 0}};
       if (motion === 'back') return {{speed: -speed, steer: 0}};
