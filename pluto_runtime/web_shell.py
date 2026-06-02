@@ -155,6 +155,7 @@ class PlutoWebContext:
         self.dance_status = DanceStatus()
         self.dance_started_at: float | None = None
         self.dance_last_stop_at = 0.0
+        self.dance_audio_started = False
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -207,6 +208,7 @@ class PlutoWebContext:
         if self.wave_thread and self.wave_thread.is_alive():
             self.wave_thread.join(timeout=1.0)
         self.stop_stm32_link()
+        self.audio_runtime.stop_playback(reason="web shell stopping")
         self.camera_service.stop()
 
     def _wave_monitor_loop(self) -> None:
@@ -908,9 +910,14 @@ class PlutoWebContext:
         if self.mode_manager.current_state == "DANCE":
             if self.dance_started_at is None:
                 self.dance_started_at = time.time()
+                self.dance_audio_started = False
             if self.mode_manager.current_substate == "DANCE_READY":
                 self.mode_manager.set_substate("DANCE_DRY_RUN", return_lock=False)
         else:
+            if self.dance_audio_started:
+                self.audio_runtime.stop_playback(reason="DANCE exited")
+                self.log("info", "DANCE audio stopped")
+            self.dance_audio_started = False
             self.dance_started_at = None
 
         status = self.dance_planner.compute(
@@ -923,6 +930,13 @@ class PlutoWebContext:
         )
 
         if status.active:
+            if not self.dance_audio_started and status.audio_status == "ready" and status.audio_file:
+                play = self.audio_runtime.play_file_async(status.audio_file)
+                self.dance_audio_started = bool(play.get("ok"))
+                if play.get("ok"):
+                    self.log("pass", f"DANCE audio started: {status.audio_file}")
+                else:
+                    self.log("warn", f"DANCE audio failed: {play.get('detail')}")
             now = time.monotonic()
             if now - self.dance_last_stop_at >= 1.0:
                 stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
@@ -1444,6 +1458,7 @@ def html_page() -> str:
         <h2>Dance</h2>
         <div class="metric"><span class="label">Mode</span><span class="value" id="danceMode">dry-run</span></div>
         <div class="metric"><span class="label">Audio</span><span class="value" id="danceAudio">unknown</span></div>
+        <div class="metric"><span class="label">Playback</span><span class="value" id="dancePlayback">none</span></div>
         <div class="metric"><span class="label">Step</span><span class="value" id="danceStep">idle</span></div>
         <div class="metric"><span class="label">Obstacles</span><span class="value" id="danceObstacles">unknown</span></div>
         <div class="metric"><span class="label">Vision</span><span class="value" id="danceVision">unknown</span></div>
@@ -1675,6 +1690,9 @@ def html_page() -> str:
         `${{dance.active ? 'active' : 'inactive'}} / ${{dance.dry_run ? 'dry-run' : 'live'}} / ${{(dance.elapsed_s || 0).toFixed(1)}}s`;
       document.getElementById('danceAudio').textContent =
         `${{dance.audio_status || 'unknown'}} / speaker ${{dance.speaker_available ? 'ok' : 'no'}} / file ${{dance.audio_file_present ? 'ok' : 'missing'}}`;
+      const dancePlayback = (data.audio || {{}}).last_playback || {{}};
+      document.getElementById('dancePlayback').textContent =
+        dancePlayback.detail ? `${{dancePlayback.ok ? 'ok' : 'fail'}} / ${{dancePlayback.detail}}` : 'none';
       document.getElementById('danceStep').textContent = dance.dance_step || 'idle';
       document.getElementById('danceObstacles').textContent = dance.obstacle_status || 'unknown';
       document.getElementById('danceVision').textContent =

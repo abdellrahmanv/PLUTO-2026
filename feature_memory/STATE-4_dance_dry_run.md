@@ -120,6 +120,8 @@ or set `PLUTO_DANCE_AUDIO` to the actual file path.
 - No dry-run path sends `CMD:DRIVE`.
 - No dry-run path sends `CMD:ARM`.
 - While DANCE is active, the web runtime periodically sends `CMD:STOP`.
+- DANCE dry-run may play the configured audio file because dry-run only blocks
+  wheel and arm motion. Audio playback is stopped when DANCE exits.
 - If STOP cannot be verified while STM32 is connected, Pluto enters ERROR.
 - Missing obstacle telemetry results in STOP proposal.
 - Obstacle values below stop threshold result in STOP proposal.
@@ -148,6 +150,9 @@ or set `PLUTO_DANCE_AUDIO` to the actual file path.
    whether a human box is too large or clipped.
 9. If `dance.audio_status` is `silent_dry_run`, add/configure a preloaded dance
    audio file before live DANCE.
+9.1. If the song exists but is silent, inspect `audio.last_playback` in
+   `/api/status` or the website `Playback` row. It should show `playback
+   started`, `playback finished`, or the exact `ffmpeg`/`aplay` error.
 10. If `dance.direction_safety` is `stage_clear_assumed_backward`, remember
     that the backward segment is allowed only because the operator has provided
     an empty 3 m x 3 m dance stage and the odometry envelope remains valid.

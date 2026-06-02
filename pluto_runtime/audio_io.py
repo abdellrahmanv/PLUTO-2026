@@ -60,6 +60,7 @@ class AudioProbe:
     last_recording: dict[str, Any] | None = None
     last_transcript: dict[str, Any] | None = None
     last_tts: dict[str, Any] | None = None
+    last_playback: dict[str, Any] | None = None
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,6 +88,8 @@ class AudioRuntime:
         self.probe_status = AudioProbe()
         self._whisper_model = None
         self._whisper_model_path: str | None = None
+        self._play_lock = threading.RLock()
+        self._play_procs: list[subprocess.Popen] = []
         self.probe()
 
     def probe(self) -> AudioProbe:
@@ -124,6 +127,7 @@ class AudioRuntime:
             last_recording=self.probe_status.last_recording,
             last_transcript=self.probe_status.last_transcript,
             last_tts=self.probe_status.last_tts,
+            last_playback=self.probe_status.last_playback,
         )
         with self.lock:
             self.probe_status = status
@@ -326,6 +330,85 @@ class AudioRuntime:
         self._set_tts(result)
         return result
 
+    def play_file_async(self, path: str | None, playback_device: str | None = None) -> dict[str, Any]:
+        file_path = Path(str(path or ""))
+        if not file_path.exists():
+            result = {"ok": False, "detail": "audio file missing", "path": str(file_path)}
+            self._set_playback(result)
+            return result
+
+        status = self.probe_status
+        device = playback_device or status.selected_speaker
+        if not device or not shutil.which("aplay"):
+            result = {"ok": False, "detail": "speaker/aplay unavailable", "path": str(file_path)}
+            self._set_playback(result)
+            return result
+        if not shutil.which("ffmpeg"):
+            result = {"ok": False, "detail": "ffmpeg unavailable for audio file playback", "path": str(file_path), "device": device}
+            self._set_playback(result)
+            return result
+
+        self.stop_playback(reason="restart playback")
+        thread = threading.Thread(target=self._play_file, args=(file_path, device), daemon=True)
+        thread.start()
+        result = {"ok": True, "detail": "playback started", "path": str(file_path), "device": device}
+        self._set_playback(result)
+        return result
+
+    def stop_playback(self, reason: str = "stop requested") -> dict[str, Any]:
+        stopped = 0
+        with self._play_lock:
+            procs = list(self._play_procs)
+            self._play_procs.clear()
+        for proc in procs:
+            if proc.poll() is None:
+                proc.terminate()
+                stopped += 1
+        result = {"ok": True, "detail": reason, "stopped_processes": stopped}
+        self._set_playback(result)
+        return result
+
+    def _play_file(self, path: Path, device: str) -> None:
+        started = time.monotonic()
+        ffmpeg = None
+        aplay = None
+        try:
+            ffmpeg = subprocess.Popen(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-f", "wav", "-"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            aplay = subprocess.Popen(
+                ["aplay", "-q", "-D", device],
+                stdin=ffmpeg.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if ffmpeg.stdout is not None:
+                ffmpeg.stdout.close()
+            with self._play_lock:
+                self._play_procs = [proc for proc in (ffmpeg, aplay) if proc is not None]
+            _, aplay_err = aplay.communicate()
+            _, ffmpeg_err = ffmpeg.communicate(timeout=1)
+            ok = aplay.returncode == 0 and ffmpeg.returncode == 0
+            detail = "playback finished" if ok else (aplay_err or ffmpeg_err or b"playback failed").decode("utf-8", errors="replace").strip()
+            result = {
+                "ok": ok,
+                "detail": detail,
+                "path": str(path),
+                "device": device,
+                "elapsed_ms": (time.monotonic() - started) * 1000.0,
+            }
+        except Exception as exc:
+            result = {"ok": False, "detail": str(exc), "path": str(path), "device": device}
+        finally:
+            for proc in (aplay, ffmpeg):
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+            with self._play_lock:
+                self._play_procs = []
+        self._set_playback(result)
+
     def _set_recording(self, result: dict[str, Any]) -> None:
         with self.lock:
             self.probe_status.last_recording = result
@@ -337,6 +420,10 @@ class AudioRuntime:
     def _set_tts(self, result: dict[str, Any]) -> None:
         with self.lock:
             self.probe_status.last_tts = result
+
+    def _set_playback(self, result: dict[str, Any]) -> None:
+        with self.lock:
+            self.probe_status.last_playback = result
 
 
 def run_text(command: list[str], timeout: float = 5.0) -> str:
