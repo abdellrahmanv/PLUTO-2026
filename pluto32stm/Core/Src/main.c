@@ -572,7 +572,9 @@ void parseCommand(char* cmd) {
     char*    comma = strchr(p, ',');
     uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
     sendUSB("ACK:ARM\r\n");
-    stepperMove(1, steps, spd);
+    if (steps != 0) {
+      stepperMove(1, steps, spd);
+    }
   }
   else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
     char*    p     = cmd + 9;
@@ -580,7 +582,9 @@ void parseCommand(char* cmd) {
     char*    comma = strchr(p, ',');
     uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
     sendUSB("ACK:ARM2\r\n");
-    stepperMove(2, steps, spd);
+    if (steps != 0) {
+      stepperMove(2, steps, spd);
+    }
   }
   else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
     returning = 1;
