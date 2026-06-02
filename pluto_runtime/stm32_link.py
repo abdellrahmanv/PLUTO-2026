@@ -79,6 +79,12 @@ class Stm32RuntimeStatus:
     arm_done_at: float | None = None
     ack_arm_done_count: int = 0
     last_arm_command: str | None = None
+    arm2_count: int = 0
+    ack_arm2_count: int = 0
+    arm2_done: bool = False
+    arm2_done_at: float | None = None
+    ack_arm2_done_count: int = 0
+    last_arm2_command: str | None = None
     # --- end Phase 1 fields ---
     line_count: int = 0
     telemetry: dict[str, float | str] = field(default_factory=dict)
@@ -236,6 +242,29 @@ class Stm32SerialLink:
             time.sleep(0.01)
         return {"ok": False, "detail": f"ARM sent but ACK:ARM not received within {int(timeout_s * 1000)} ms", "command": command}
 
+    def send_arm2(self, steps: int, speed: int = 200, wait_ack: bool = True, timeout_s: float = 0.45) -> dict[str, Any]:
+        """Send CMD:ARM2:<steps>,<speed> for the second NEMA driver.
+
+        Same safety warning as send_arm(): this is a low-level primitive and
+        callers must enforce bounds before invoking it.
+        """
+        with self._lock:
+            before = self._status.ack_arm2_count
+            self._status.arm2_done = False
+            self._status.arm2_done_at = None
+        command = f"CMD:ARM2:{int(steps)},{int(speed)}"
+        ok, detail = self.send_command(command)
+        if not ok or not wait_ack:
+            return {"ok": ok, "detail": detail, "command": command}
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._status.ack_arm2_count > before:
+                    return {"ok": True, "detail": "ACK:ARM2", "command": command}
+            time.sleep(0.01)
+        return {"ok": False, "detail": f"ARM2 sent but ACK:ARM2 not received within {int(timeout_s * 1000)} ms", "command": command}
+
     def send_command(self, command: str) -> tuple[bool, str]:
         command = command.strip()
         if not command:
@@ -267,6 +296,9 @@ class Stm32SerialLink:
                 elif command.startswith("CMD:ARM:"):
                     self._status.arm_count += 1
                     self._status.last_arm_command = command
+                elif command.startswith("CMD:ARM2:"):
+                    self._status.arm2_count += 1
+                    self._status.last_arm2_command = command
                 return True, "sent"
             except Exception as exc:
                 self._status.error = str(exc)
@@ -366,6 +398,12 @@ class Stm32SerialLink:
                 self._status.arm_done = True
                 self._status.arm_done_at = now_wall
                 self._status.ack_arm_done_count += 1
+            elif line == "ACK:ARM2":
+                self._status.ack_arm2_count += 1
+            elif line == "ACK:ARM2_DONE":
+                self._status.arm2_done = True
+                self._status.arm2_done_at = now_wall
+                self._status.ack_arm2_done_count += 1
             elif line.startswith("TEL:"):
                 self._status.telemetry = parse_tel_line(line)
             elif line.startswith("OBS:"):

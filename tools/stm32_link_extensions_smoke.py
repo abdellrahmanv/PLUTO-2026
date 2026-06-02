@@ -56,6 +56,12 @@ def test_status_defaults() -> None:
     assert status.arm_done_at is None
     assert status.ack_arm_done_count == 0
     assert status.last_arm_command is None
+    assert status.arm2_count == 0
+    assert status.ack_arm2_count == 0
+    assert status.arm2_done is False
+    assert status.arm2_done_at is None
+    assert status.ack_arm2_done_count == 0
+    assert status.last_arm2_command is None
     print("  status_defaults PASS")
 
 
@@ -117,6 +123,21 @@ def test_ack_arm_done_parsing() -> None:
     assert link._status.arm_done_at is not None
     assert link._status.ack_arm_done_count == 1
     print("  ack_arm_done_parsing PASS")
+
+
+def test_ack_arm2_parsing() -> None:
+    """_handle_line must parse second NEMA ACKs."""
+    link = Stm32SerialLink("COM_FAKE", baud=115200)
+    assert link._status.ack_arm2_count == 0
+    assert link._status.arm2_done is False
+    link._handle_line("ACK:ARM2")
+    assert link._status.ack_arm2_count == 1
+    assert link._status.arm2_done is False
+    link._handle_line("ACK:ARM2_DONE")
+    assert link._status.arm2_done is True
+    assert link._status.arm2_done_at is not None
+    assert link._status.ack_arm2_done_count == 1
+    print("  ack_arm2_parsing PASS")
 
 
 def test_arm_sequence() -> None:
@@ -224,6 +245,13 @@ def test_command_tracking_with_mock() -> None:
     assert link._status.arm_count == 1
     assert link._status.last_arm_command == "CMD:ARM:150,100"
 
+    # 4. Test ARM2
+    res = link.send_arm2(steps=-75, speed=250, wait_ack=False)
+    assert res["ok"] is True
+    assert fake_ser.written[-1] == b"CMD:ARM2:-75,250\n"
+    assert link._status.arm2_count == 1
+    assert link._status.last_arm2_command == "CMD:ARM2:-75,250"
+
     print("  command_tracking_with_mock PASS")
 
 
@@ -305,6 +333,8 @@ def test_get_status_includes_new_fields() -> None:
     link._handle_line("ACK:RETURN")
     link._handle_line("ACK:ARM")
     link._handle_line("ACK:ARM_DONE")
+    link._handle_line("ACK:ARM2")
+    link._handle_line("ACK:ARM2_DONE")
     link._handle_line("ACK:RESET_HOME")
     status = link.get_status()
     assert status.ack_return_count == 1
@@ -312,6 +342,10 @@ def test_get_status_includes_new_fields() -> None:
     assert status.arm_done is True
     assert status.arm_done_at is not None
     assert status.ack_arm_done_count == 1
+    assert status.ack_arm2_count == 1
+    assert status.arm2_done is True
+    assert status.arm2_done_at is not None
+    assert status.ack_arm2_done_count == 1
     assert status.ack_reset_home_count == 1
     assert hasattr(status, "return_active")
     print("  get_status_new_fields PASS")
@@ -325,6 +359,7 @@ def main() -> int:
     test_ack_reset_home_parsing()
     test_ack_arm_parsing()
     test_ack_arm_done_parsing()
+    test_ack_arm2_parsing()
     test_arm_sequence()
     test_return_complete_resets_on_new_return()
     test_arm_done_resets_on_new_arm()

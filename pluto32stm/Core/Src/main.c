@@ -17,9 +17,12 @@
   *   PA5   → HC-SR04 Front       ECHO
   *   PA6   → HC-SR04 Front-Right TRIG
   *   PA7   → HC-SR04 Front-Right ECHO
-  *   PB8   → NEMA Stepper STEP
-  *   PB9   → NEMA Stepper DIR
-  *   PB10  → NEMA Stepper EN  (LOW = enabled)
+  *   PB8   → NEMA Arm 1 STEP
+  *   PB9   → NEMA Arm 1 DIR
+  *   PB10  → NEMA Arm 1 EN  (LOW = enabled)
+  *   PB12  → NEMA Arm 2 STEP
+  *   PB13  → NEMA Arm 2 DIR
+  *   PB14  → NEMA Arm 2 EN  (LOW = enabled)
   *   PB0   → Emergency button (INPUT_PULLUP)
   *   PC13  → Status LED (active LOW)
   ******************************************************************************
@@ -98,6 +101,13 @@ typedef struct {
 #define EN_PORT             GPIOB
 #define EN_PIN_NUM          GPIO_PIN_10
 
+#define STEP2_PORT          GPIOB
+#define STEP2_PIN_NUM       GPIO_PIN_12
+#define DIR2_PORT           GPIOB
+#define DIR2_PIN_NUM        GPIO_PIN_13
+#define EN2_PORT            GPIOB
+#define EN2_PIN_NUM         GPIO_PIN_14
+
 #define EMERG_PORT          GPIOB
 #define EMERG_PIN           GPIO_PIN_0
 #define LED_PORT            GPIOC
@@ -148,12 +158,12 @@ uint8_t  emergStop        = 0;
 uint8_t  returning        = 0;
 uint8_t  piTimedOut       = 0;
 
-// ── Stepper ─────────────────────────────────────────────────
-uint8_t  stepperRunning   = 0;
-int32_t  stepsTarget      = 0;
-int32_t  stepsCount       = 0;
-uint32_t stepInterval_us  = 2000;
-uint32_t lastStepTime_us  = 0;
+// ── Stepper / NEMA arms ─────────────────────────────────────
+uint8_t  stepperRunning[2]  = {0, 0};
+int32_t  stepsTarget[2]     = {0, 0};
+int32_t  stepsCount[2]      = {0, 0};
+uint32_t stepInterval_us[2] = {2000, 2000};
+uint32_t lastStepTime_us[2] = {0, 0};
 
 // ── Timing ──────────────────────────────────────────────────
 uint32_t lastHBSend       = 0;
@@ -182,10 +192,11 @@ float measureDistance(GPIO_TypeDef* trigPort, uint16_t trigPin,
                       GPIO_TypeDef* echoPort, uint16_t echoPin);
 void readSonars(void);
 uint8_t obstacleAhead(void);
-void stepperEnable(void);
-void stepperDisable(void);
-void stepperMove(int32_t steps, uint32_t speed_sps);
-void stepperStop(void);
+void stepperEnable(uint8_t arm);
+void stepperDisable(uint8_t arm);
+void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps);
+void stepperStop(uint8_t arm);
+void stepperStopAll(void);
 void runStepper(void);
 void applyMotorSafety(void);
 float distanceToHome(void);
@@ -351,42 +362,81 @@ uint8_t obstacleAhead(void) {
 }
 
 // ── Stepper control ─────────────────────────────────────────
-void stepperEnable(void)  {
-  HAL_GPIO_WritePin(EN_PORT, EN_PIN_NUM, GPIO_PIN_RESET);
-}
-void stepperDisable(void) {
-  HAL_GPIO_WritePin(EN_PORT, EN_PIN_NUM, GPIO_PIN_SET);
+void stepperEnable(uint8_t arm)  {
+  if (arm == 2) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, GPIO_PIN_RESET);
+  else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  GPIO_PIN_RESET);
 }
 
-void stepperMove(int32_t steps, uint32_t speed_sps) {
+void stepperDisable(uint8_t arm) {
+  if (arm == 2) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, GPIO_PIN_SET);
+  else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  GPIO_PIN_SET);
+}
+
+void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps) {
+  if (arm < 1 || arm > 2) arm = 1;
+  uint8_t idx = arm - 1;
+
+  // steps and speed are intentionally variable. Pi decides bounded values.
   if (speed_sps == 0) speed_sps = 200;
-  stepInterval_us = 1000000UL / speed_sps;
-  stepsTarget     = abs(steps);
-  stepsCount      = 0;
-  HAL_GPIO_WritePin(DIR_PORT, DIR_PIN_NUM,
-                    steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  stepperEnable();
-  stepperRunning = 1;
+  if (speed_sps > 3000) speed_sps = 3000; // firmware hard ceiling
+  stepInterval_us[idx] = 1000000UL / speed_sps;
+  stepsTarget[idx]     = labs(steps);
+  stepsCount[idx]      = 0;
+
+  if (stepsTarget[idx] == 0) {
+    stepperRunning[idx] = 0;
+    stepperDisable(arm);
+    sendUSB(arm == 2 ? "ACK:ARM2_DONE\r\n" : "ACK:ARM_DONE\r\n");
+    return;
+  }
+
+  if (arm == 2) {
+    HAL_GPIO_WritePin(DIR2_PORT, DIR2_PIN_NUM,
+                      steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  } else {
+    HAL_GPIO_WritePin(DIR_PORT, DIR_PIN_NUM,
+                      steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  }
+
+  stepperEnable(arm);
+  stepperRunning[idx] = 1;
 }
 
-void stepperStop(void) {
-  stepperRunning = 0;
-  stepperDisable();
+void stepperStop(uint8_t arm) {
+  if (arm < 1 || arm > 2) arm = 1;
+  uint8_t idx = arm - 1;
+  stepperRunning[idx] = 0;
+  stepperDisable(arm);
+}
+
+void stepperStopAll(void) {
+  stepperStop(1);
+  stepperStop(2);
 }
 
 void runStepper(void) {
-  if (!stepperRunning) return;
   uint32_t now = micros();
-  if (now - lastStepTime_us >= stepInterval_us) {
-    lastStepTime_us = now;
-    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_SET);
-    delay_us(2);
-    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_RESET);
-    stepsCount++;
-    if (stepsCount >= stepsTarget) {
-      stepperRunning = 0;
-      stepperDisable();
-      sendUSB("ACK:ARM_DONE\r\n");
+  for (uint8_t arm = 1; arm <= 2; arm++) {
+    uint8_t idx = arm - 1;
+    if (!stepperRunning[idx]) continue;
+    if (now - lastStepTime_us[idx] >= stepInterval_us[idx]) {
+      lastStepTime_us[idx] = now;
+      if (arm == 2) {
+        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, GPIO_PIN_SET);
+        delay_us(2);
+        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, GPIO_PIN_RESET);
+      } else {
+        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_SET);
+        delay_us(2);
+        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_RESET);
+      }
+
+      stepsCount[idx]++;
+      if (stepsCount[idx] >= stepsTarget[idx]) {
+        stepperRunning[idx] = 0;
+        stepperDisable(arm);
+        sendUSB(arm == 2 ? "ACK:ARM2_DONE\r\n" : "ACK:ARM_DONE\r\n");
+      }
     }
   }
 }
@@ -435,7 +485,7 @@ void applyMotorSafety(void) {
   if (emergStop) {
     cmdSpeed = 0;
     cmdSteer = 0;
-    stepperStop();
+    stepperStopAll();
   }
 }
 
@@ -490,7 +540,7 @@ void parseCommand(char* cmd) {
     cmdSpeed  = 0;
     cmdSteer  = 0;
     returning = 0;
-    stepperStop();
+    stepperStopAll();
     sendUSB("ACK:STOP\r\n");
   }
   else if (strncmp(cmd, "CMD:DRIVE:", 10) == 0) {
@@ -509,8 +559,16 @@ void parseCommand(char* cmd) {
     int32_t  steps = atol(p);
     char*    comma = strchr(p, ',');
     uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-    stepperMove(steps, spd);
+    stepperMove(1, steps, spd);
     sendUSB("ACK:ARM\r\n");
+  }
+  else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
+    char*    p     = cmd + 9;
+    int32_t  steps = atol(p);
+    char*    comma = strchr(p, ',');
+    uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
+    stepperMove(2, steps, spd);
+    sendUSB("ACK:ARM2\r\n");
   }
   else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
     returning = 1;
@@ -605,8 +663,9 @@ int main(void)
   lastOdoTime = HAL_GetTick();
   lastRPiCmd  = HAL_GetTick();
 
-  // stepper disabled at boot
-  stepperDisable();
+  // steppers disabled at boot
+  stepperDisable(1);
+  stepperDisable(2);
 
   // all TRIG pins LOW
   HAL_GPIO_WritePin(TRIG_FL_PORT, TRIG_FL_PIN, GPIO_PIN_RESET);
@@ -770,8 +829,10 @@ static void MX_GPIO_Init(void)
 
   // ── Outputs LOW at boot ──────────────────────────────────
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_4|GPIO_PIN_6, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8|GPIO_PIN_9,            GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10,                      GPIO_PIN_SET);  // EN high = disabled
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_12|GPIO_PIN_13,
+                    GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_14,
+                    GPIO_PIN_SET);  // EN high = disabled
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13,                      GPIO_PIN_SET);  // LED off
 
   // ── TRIG pins — output ───────────────────────────────────
@@ -788,14 +849,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   // ── Stepper STEP + DIR — output ──────────────────────────
-  GPIO_InitStruct.Pin   = GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Pin   = GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_12|GPIO_PIN_13;
   GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull  = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   // ── Stepper EN — output ──────────────────────────────────
-  GPIO_InitStruct.Pin   = GPIO_PIN_10;
+  GPIO_InitStruct.Pin   = GPIO_PIN_10|GPIO_PIN_14;
   GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull  = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

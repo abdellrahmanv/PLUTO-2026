@@ -259,6 +259,9 @@ The NEMA/stepper arm is an actuator. It must be bounded, observable, and safe.
 | ARM-010 | If physical limit switches are installed later, STM32 shall treat them as safety inputs. | STM32 | Limit switch test |
 | ARM-011 | Pi shall not command arm movement while WELCOME_RETURN is active unless explicitly required for safe posture. | Pi | Return test |
 | ARM-012 | Arm failures shall not block wheel stop commands. | STM32 | Fault injection |
+| ARM-013 | STM32 shall support two NEMA stepper driver channels with independent STEP/DIR/EN pins. | STM32 | Pin map review |
+| ARM-014 | NEMA commands shall remain variable by command parameters, not firmware constants: steps and speed are supplied by Pi command. | Pi + STM32 | Command log |
+| ARM-015 | NEMA channel 1 shall use `CMD:ARM:<steps>,<speed>` and NEMA channel 2 shall use `CMD:ARM2:<steps>,<speed>` in v1. | Pi + STM32 | Serial smoke test |
 
 ## Feature Memory Requirements
 
@@ -370,6 +373,7 @@ Requirements must stay testable. Growth without verification is not acceptable.
 | IF-STM32-013 | Pi shall support sending `CMD:RETURN` for odometry-guided home return and tracking `ACK:RETURN` / `ACK:RETURN_COMPLETE`. | Command log |
 | IF-STM32-014 | Pi shall support sending `CMD:RESET_HOME` to mark current coordinates as home position. | Command log |
 | IF-STM32-015 | Pi shall support sending NEMA stepper movement as `CMD:ARM:<steps>,<speed>` and tracking completion via `ACK:ARM_DONE`. | Command log |
+| IF-STM32-016 | Pi and STM32 shall support the second NEMA channel as `CMD:ARM2:<steps>,<speed>` with `ACK:ARM2` and `ACK:ARM2_DONE`. | Command log |
 
 ### Pi To Uno
 
