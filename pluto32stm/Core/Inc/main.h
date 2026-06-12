@@ -63,6 +63,10 @@ void Error_Handler(void);
 #define ARM2_DIR_GPIO_Port GPIOB
 #define ARM2_EN_Pin GPIO_PIN_14
 #define ARM2_EN_GPIO_Port GPIOB
+#define IMU_SCL_Pin GPIO_PIN_6
+#define IMU_SCL_GPIO_Port GPIOB
+#define IMU_SDA_Pin GPIO_PIN_7
+#define IMU_SDA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

@@ -1,10 +1,10 @@
 # Feature Memory: Operator Console Shell
 
-Status: implemented, awaiting Raspberry Pi browser validation
+Status: implemented, production-console UI pass awaiting Raspberry Pi browser validation
 
-Last updated: 2026-05-26
+Last updated: 2026-06-09
 
-Last validated: not yet validated on Raspberry Pi browser
+Last validated: 2026-06-09 local browser render and smoke test, not yet validated on Raspberry Pi browser
 
 Owner: Pluto systems engineering
 
@@ -31,6 +31,8 @@ WEB-021
 WEB-022
 WEB-024
 WEB-025
+WEB-026
+WEB-028
 WEB-SAFE-001
 WEB-SAFE-002
 WEB-TIME-004
@@ -45,6 +47,8 @@ VER-WEB-006
 VER-WEB-008
 VER-WEB-009
 VER-WEB-010
+VER-WEB-011
+VER-WEB-013
 Phase 3 web shell smoke test
 ```
 
@@ -58,7 +62,25 @@ debug events, and provide a visible emergency stop path.
 
 The implementation is a dependency-light Python HTTP server in
 `pluto_runtime/web_shell.py`. It uses the Python standard library for the web
-server so Phase 3 does not depend on Flask, Node, or deployment tooling.
+server so the console does not depend on Flask, Node, or deployment tooling.
+
+The production UI pass keeps the same routes and safety gates, but reorganizes
+the first viewport around a mission-control readiness strip: current state,
+safety gate, hardware link, runtime/refresh age, and visible emergency stop.
+This makes deployment checks fast and unambiguous without adding any new
+control bypasses.
+
+The launch-monitor pass adds a local Three.js 3D digital twin. It uses the
+Simulink/ROS `my_robot` STL meshes for the base, wheels, and arms, served from
+the web shell with no external CDN required at runtime. A generated proxy robot
+remains available as a fallback if CAD assets fail to load.
+
+The detailed 3D launch monitor memory is recorded in
+`feature_memory/WEB-026_launch_monitor_3d_digital_twin.md`.
+
+The console includes a persisted operator theme selector with Auto, Dark, and
+Light modes. The selected mode is stored in browser local storage under
+`pluto-theme`, and Auto follows the operating-system color-scheme preference.
 
 The shell scans serial devices directly for STM32 and Uno status. Motion states
 are displayed but blocked because the Phase 5 mode manager and later behavior
@@ -75,11 +97,14 @@ Inputs:
 Outputs:
 
 - HTML operator console at `/`.
+- Production readiness strip on `/`.
+- Link to tablet face at `/face`.
 - JSON status at `/api/status`.
 - Hardware refresh at `/api/refresh-hardware`.
 - Emergency stop at `/api/emergency-stop`.
 - State request path at `/api/request-state`.
 - Dry-run shutdown shell at `/api/shutdown`.
+- Browser-persisted theme selector in the header.
 
 External dependencies:
 
@@ -109,6 +134,7 @@ Normal behavior:
 6. Poll `/api/status` every second from the browser.
 7. If operator presses emergency stop, send `CMD:STOP` when STM32 is available
    and move shell state to ERROR.
+8. If operator changes theme, apply it immediately and persist it locally.
 
 Blocked behavior:
 
@@ -178,11 +204,14 @@ Website home:
 
 ```text
 PLUTO visible as the main project identity.
+PLUTO Mission Control visible as the operator console title.
+Mission readiness strip visible.
 Current state visible.
 Emergency Stop visible.
 Hardware status visible.
 Bootstrap report visible.
 Events visible.
+Theme selector visible with Auto, Dark, and Light options.
 ```
 
 API evidence:
@@ -199,11 +228,14 @@ POST /api/drive -> 404
 | Test ID | Method | Expected Result | Last Result |
 | --- | --- | --- | --- |
 | VER-WEB-001 | Open home page | `PLUTO` visible | local smoke pass |
+| VER-WEB-001A | Open home page | `PLUTO Mission Control` and readiness strip visible | local smoke pass |
 | VER-WEB-005 | Request MANUAL while shell blocks modes | Request rejected with reason | local smoke pass |
 | VER-WEB-006 | Press emergency stop | `CMD:STOP` attempted and state becomes ERROR | local smoke pass without hardware ACK |
 | VER-WEB-008 | View bootstrap report | Hardware report visible in `/api/status` and UI | local smoke pass |
 | VER-WEB-009 | Open on phone viewport | Layout stacks without overlap | not yet browser-validated |
 | VER-WEB-010 | Attempt raw drive route | `/api/drive` returns `404` | local smoke pass |
+| VER-WEB-011 | Open launch monitor page with local static assets | 3D robot visualization and launch gate render | 2026-06-09 local browser pass |
+| VER-WEB-013 | Toggle website theme to Dark and reload | Dark mode remains selected and readable | 2026-06-09 local browser pass |
 
 ## Failure Modes
 
@@ -214,6 +246,7 @@ POST /api/drive -> 404
 | Emergency stop lacks ACK | STM32 unavailable or serial busy | Event log and API serial detail | Use physical stop / STM32 safety, then debug serial |
 | State request blocked | Expected in Phase 3 | Event log says mode manager missing | Implement Phase 5 before accepting transitions |
 | Raw drive unavailable | Expected safety behavior | `/api/drive` returns 404 | Use MANUAL phase later |
+| Theme does not persist | Browser local storage disabled | Check `document.documentElement.dataset.themeChoice` | Use Auto default or enable storage |
 
 ## Safety Notes
 
@@ -232,4 +265,7 @@ available, but the STM32 remains the real motor safety controller.
 
 | Date | Change | Reason |
 | --- | --- | --- |
+| 2026-06-09 | Added persisted Auto/Dark/Light theme selector | Operator requested dark mode option |
+| 2026-06-09 | Added 3D launch monitor memory link and validation evidence | Keep feature memory aligned with website changes |
+| 2026-06-08 | Production mission-control UI pass | Make deployment console clearer and first-viewport operational |
 | 2026-05-26 | Initial implementation memory | Phase 3 initiated |

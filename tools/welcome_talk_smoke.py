@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pluto_runtime.welcome_talk import INTENT_RULES, WelcomeTalkEngine, count_words
+from pluto_runtime.welcome_talk import INTENT_RULES, SCRIPT_RULES, WelcomeTalkEngine, count_words
 
 
 HOST = "127.0.0.1"
@@ -65,8 +65,15 @@ def assert_word_limited(text: str, limit: int = 9) -> None:
 
 def run_engine_checks() -> None:
     engine = WelcomeTalkEngine()
+    engine_status = engine.status()
+    assert engine_status["intent_count"] >= 180
+    assert engine_status["script_count"] >= 30
+    assert engine_status["response_bank_size"] >= 210
+    assert engine_status["alias_group_count"] >= 20
 
     for rule in INTENT_RULES:
+        assert_word_limited(rule.response)
+    for rule in SCRIPT_RULES:
         assert_word_limited(rule.response)
 
     name = engine.answer("what is your name")
@@ -92,6 +99,31 @@ def run_engine_checks() -> None:
     assert weather.intent == "weather"
     assert weather.response == "It is slightly hot today."
     assert_word_limited(weather.response)
+
+    script = engine.answer("demo script")
+    assert script.accepted is True
+    assert script.intent == "script_demo_opening"
+    assert script.response_source == "script"
+    assert script.response == "Welcome. I am Pluto, your graduation robot."
+    assert_word_limited(script.response)
+
+    no_llm = engine.answer("are you chatgpt")
+    assert no_llm.accepted is True
+    assert no_llm.intent == "not_llm"
+    assert no_llm.response == "No LLM. Local matching only."
+    assert_word_limited(no_llm.response)
+
+    matching = engine.answer("word matching")
+    assert matching.accepted is True
+    assert matching.intent == "matching_method"
+    assert matching.response == "I match words, aliases, scripts, and fuzziness."
+    assert_word_limited(matching.response)
+
+    alias = engine.answer("dashboard pitch")
+    assert alias.accepted is True
+    assert alias.intent == "script_system_website"
+    assert alias.response_source == "script"
+    assert_word_limited(alias.response)
 
     msa_name = engine.answer("what means msa")
     assert msa_name.accepted is True
@@ -156,7 +188,10 @@ def run_web_checks(base: str, hardware_flow: bool) -> None:
     assert status["talk"]["max_input_words"] == 9
     assert status["talk"]["max_output_words"] == 9
     assert status["talk"]["ollama_fallback_enabled"] is False
-    assert status["talk"]["intent_count"] >= 130
+    assert status["talk"]["intent_count"] >= 180
+    assert status["talk"]["script_count"] >= 30
+    assert status["talk"]["response_bank_size"] >= 210
+    assert status["talk"]["alias_group_count"] >= 20
     assert "audio" in status
 
     blocked_code, blocked_raw = request(base, "/api/welcome/talk", "POST", {"text": "what is your name"})

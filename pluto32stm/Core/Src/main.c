@@ -83,6 +83,11 @@ typedef struct {
 #define BAT_MIN_VOLTAGE     34.0f
 #define HB_ERROR_MAX        3
 
+// ── IMU / MPU6050 ──────────────────────────────────────────
+#define IMU_REG_PWR_MGMT_1  0x6B
+#define IMU_REG_WHO_AM_I    0x75
+#define IMU_REG_DATA_START  0x3B
+
 // ── GPIO macros ─────────────────────────────────────────────
 #define TRIG_FL_PORT        GPIOA
 #define TRIG_FL_PIN         GPIO_PIN_0
@@ -112,6 +117,28 @@ typedef struct {
 #define DIR2_PIN_NUM        GPIO_PIN_13
 #define EN2_PORT            GPIOB
 #define EN2_PIN_NUM         GPIO_PIN_14
+
+// TB6600 simple/direct-drive mode:
+// STM32 STEP/DIR pins go to PUL+/DIR+, and PUL-/DIR- go to GND.
+// Keep the STEP pulse wide enough for optocoupler inputs.
+#define STEPPER_PULSE_US       10U
+#define STEPPER_COMMON_ANODE   0U
+#define STEPPER_EN_USED        0U
+
+#if STEPPER_COMMON_ANODE
+#define STEPPER_STEP_ACTIVE    GPIO_PIN_RESET
+#define STEPPER_STEP_IDLE      GPIO_PIN_SET
+#define STEPPER_DIR_POSITIVE   GPIO_PIN_RESET
+#define STEPPER_DIR_NEGATIVE   GPIO_PIN_SET
+#else
+#define STEPPER_STEP_ACTIVE    GPIO_PIN_SET
+#define STEPPER_STEP_IDLE      GPIO_PIN_RESET
+#define STEPPER_DIR_POSITIVE   GPIO_PIN_SET
+#define STEPPER_DIR_NEGATIVE   GPIO_PIN_RESET
+#endif
+
+#define STEPPER_EN_ACTIVE      GPIO_PIN_RESET
+#define STEPPER_EN_IDLE        GPIO_PIN_SET
 
 #define EMERG_PORT          GPIOB
 #define EMERG_PIN           GPIO_PIN_0
@@ -167,6 +194,19 @@ uint8_t  emergStop        = 0;
 uint8_t  returning        = 0;
 uint8_t  piTimedOut       = 0;
 
+// ── IMU state ───────────────────────────────────────────────
+uint8_t  imuPresent        = 0;
+uint8_t  imuAddr           = 0;
+uint8_t  imuWhoAmI         = 0;
+int16_t  imuAx             = 0;
+int16_t  imuAy             = 0;
+int16_t  imuAz             = 0;
+int16_t  imuGx             = 0;
+int16_t  imuGy             = 0;
+int16_t  imuGz             = 0;
+float    imuTempC          = 0.0f;
+uint32_t lastImuRead       = 0;
+
 // ── Stepper / NEMA arms ─────────────────────────────────────
 uint8_t  stepperRunning[2]  = {0, 0};
 int32_t  stepsTarget[2]     = {0, 0};
@@ -211,6 +251,9 @@ void parseCommand(char* cmd);
 void readRPi(void);
 void sendTelemetry(void);
 void sendUSB(const char* msg);
+uint8_t imuInit(void);
+void readIMU(void);
+void imuBusInit(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -373,15 +416,173 @@ uint8_t obstacleAhead(void) {
           dist_FR < OBSTACLE_STOP_CM);
 }
 
+// ── IMU / MPU6050 bring-up and raw read ─────────────────────
+static int16_t be16(uint8_t hi, uint8_t lo) {
+  return (int16_t)((uint16_t)hi << 8 | lo);
+}
+
+void imuBusInit(void) {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  HAL_GPIO_WritePin(IMU_SCL_GPIO_Port, IMU_SCL_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(IMU_SDA_GPIO_Port, IMU_SDA_Pin, GPIO_PIN_SET);
+  GPIO_InitStruct.Pin = IMU_SCL_Pin|IMU_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+}
+
+static void imuDelay(void) {
+  delay_us(4);
+}
+
+static void imuScl(uint8_t high) {
+  HAL_GPIO_WritePin(IMU_SCL_GPIO_Port, IMU_SCL_Pin, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  imuDelay();
+}
+
+static void imuSda(uint8_t high) {
+  HAL_GPIO_WritePin(IMU_SDA_GPIO_Port, IMU_SDA_Pin, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  imuDelay();
+}
+
+static uint8_t imuReadSda(void) {
+  return HAL_GPIO_ReadPin(IMU_SDA_GPIO_Port, IMU_SDA_Pin) == GPIO_PIN_SET;
+}
+
+static void imuStart(void) {
+  imuSda(1);
+  imuScl(1);
+  imuSda(0);
+  imuScl(0);
+}
+
+static void imuStop(void) {
+  imuSda(0);
+  imuScl(1);
+  imuSda(1);
+}
+
+static uint8_t imuWriteByte(uint8_t value) {
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    imuSda((value & 0x80) != 0);
+    imuScl(1);
+    imuScl(0);
+    value <<= 1;
+  }
+  imuSda(1);
+  imuScl(1);
+  uint8_t ack = !imuReadSda();
+  imuScl(0);
+  return ack;
+}
+
+static uint8_t imuReadByte(uint8_t ack) {
+  uint8_t value = 0;
+  imuSda(1);
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    value <<= 1;
+    imuScl(1);
+    if (imuReadSda()) value |= 1;
+    imuScl(0);
+  }
+  imuSda(ack ? 0 : 1);
+  imuScl(1);
+  imuScl(0);
+  imuSda(1);
+  return value;
+}
+
+static uint8_t imuWriteReg(uint8_t addr7, uint8_t reg, uint8_t value) {
+  imuStart();
+  if (!imuWriteByte((addr7 << 1) | 0)) { imuStop(); return 0; }
+  if (!imuWriteByte(reg)) { imuStop(); return 0; }
+  if (!imuWriteByte(value)) { imuStop(); return 0; }
+  imuStop();
+  return 1;
+}
+
+static uint8_t imuReadRegs(uint8_t addr7, uint8_t reg, uint8_t* data, uint8_t len) {
+  imuStart();
+  if (!imuWriteByte((addr7 << 1) | 0)) { imuStop(); return 0; }
+  if (!imuWriteByte(reg)) { imuStop(); return 0; }
+  imuStart();
+  if (!imuWriteByte((addr7 << 1) | 1)) { imuStop(); return 0; }
+  for (uint8_t i = 0; i < len; i++) {
+    data[i] = imuReadByte(i + 1 < len);
+  }
+  imuStop();
+  return 1;
+}
+
+uint8_t imuInit(void) {
+  uint8_t candidate[2] = {0x68, 0x69};
+  for (uint8_t i = 0; i < 2; i++) {
+    uint8_t who = 0;
+    if (imuReadRegs(candidate[i], IMU_REG_WHO_AM_I, &who, 1)) {
+      imuAddr = candidate[i];
+      imuWhoAmI = who;
+      imuWriteReg(imuAddr, IMU_REG_PWR_MGMT_1, 0x00);
+      HAL_Delay(50);
+      imuPresent = 1;
+      return 1;
+    }
+  }
+  imuPresent = 0;
+  imuAddr = 0;
+  imuWhoAmI = 0;
+  return 0;
+}
+
+void readIMU(void) {
+  uint32_t now = HAL_GetTick();
+  if (now - lastImuRead < 100) return;
+  lastImuRead = now;
+
+  if (!imuPresent) {
+    imuInit();
+    return;
+  }
+
+  uint8_t data[14];
+  if (!imuReadRegs(imuAddr, IMU_REG_DATA_START, data, sizeof(data))) {
+    imuPresent = 0;
+    return;
+  }
+
+  imuAx = be16(data[0], data[1]);
+  imuAy = be16(data[2], data[3]);
+  imuAz = be16(data[4], data[5]);
+  int16_t tempRaw = be16(data[6], data[7]);
+  imuGx = be16(data[8], data[9]);
+  imuGy = be16(data[10], data[11]);
+  imuGz = be16(data[12], data[13]);
+  imuTempC = ((float)tempRaw / 340.0f) + 36.53f;
+}
+
 // ── Stepper control ─────────────────────────────────────────
 void stepperEnable(uint8_t arm)  {
-  if (arm == 2) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, GPIO_PIN_RESET);
-  else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  GPIO_PIN_RESET);
+#if STEPPER_EN_USED
+  if (arm == 2) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, STEPPER_EN_ACTIVE);
+  else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  STEPPER_EN_ACTIVE);
+#else
+  (void)arm;
+#endif
 }
 
 void stepperDisable(uint8_t arm) {
-  if (arm == 2) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, GPIO_PIN_SET);
-  else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  GPIO_PIN_SET);
+  if (arm == 2) {
+    HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, STEPPER_STEP_IDLE);
+#if STEPPER_EN_USED
+    HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, STEPPER_EN_IDLE);
+#endif
+  } else {
+    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, STEPPER_STEP_IDLE);
+#if STEPPER_EN_USED
+    HAL_GPIO_WritePin(EN_PORT, EN_PIN_NUM, STEPPER_EN_IDLE);
+#endif
+  }
 }
 
 void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps) {
@@ -404,10 +605,10 @@ void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps) {
 
   if (arm == 2) {
     HAL_GPIO_WritePin(DIR2_PORT, DIR2_PIN_NUM,
-                      steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                      steps > 0 ? STEPPER_DIR_POSITIVE : STEPPER_DIR_NEGATIVE);
   } else {
     HAL_GPIO_WritePin(DIR_PORT, DIR_PIN_NUM,
-                      steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                      steps > 0 ? STEPPER_DIR_POSITIVE : STEPPER_DIR_NEGATIVE);
   }
 
   stepperEnable(arm);
@@ -434,13 +635,13 @@ void runStepper(void) {
     if (now - lastStepTime_us[idx] >= stepInterval_us[idx]) {
       lastStepTime_us[idx] = now;
       if (arm == 2) {
-        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, GPIO_PIN_SET);
-        delay_us(2);
-        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, STEPPER_STEP_ACTIVE);
+        delay_us(STEPPER_PULSE_US);
+        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, STEPPER_STEP_IDLE);
       } else {
-        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_SET);
-        delay_us(2);
-        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, STEPPER_STEP_ACTIVE);
+        delay_us(STEPPER_PULSE_US);
+        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, STEPPER_STEP_IDLE);
       }
 
       stepsCount[idx]++;
@@ -655,6 +856,20 @@ void sendTelemetry(void) {
     "OBS:FL:%.0f,F:%.0f,FR:%.0f\r\n",
     dist_FL, dist_F, dist_FR);
   sendUSB(buf);
+
+  snprintf(buf, sizeof(buf),
+    "IMU:OK:%u,ADDR:0x%02X,WHO:0x%02X,AX:%d,AY:%d,AZ:%d,GX:%d,GY:%d,GZ:%d,TEMP:%.1f\r\n",
+    imuPresent,
+    imuAddr,
+    imuWhoAmI,
+    imuAx,
+    imuAy,
+    imuAz,
+    imuGx,
+    imuGy,
+    imuGz,
+    imuTempC);
+  sendUSB(buf);
 }
 
 /* USER CODE END 0 */
@@ -707,6 +922,10 @@ int main(void)
   HAL_GPIO_WritePin(TRIG_F_PORT,  TRIG_F_PIN,  GPIO_PIN_RESET);
   HAL_GPIO_WritePin(TRIG_FR_PORT, TRIG_FR_PIN, GPIO_PIN_RESET);
 
+  // optional IMU probe on PB6/PB7 software I2C
+  imuBusInit();
+  imuInit();
+
   // wait for USB CDC to enumerate on RPi
   HAL_Delay(1500);
 
@@ -739,27 +958,30 @@ int main(void)
     // 4 — run stepper pulses
     runStepper();
 
-    // 5 — navigate home if returning
+    // 5 — read optional IMU
+    readIMU();
+
+    // 6 — navigate home if returning
     if (returning) {
       navigateToHome();
     }
 
-    // 6 — safety layer (always last before send)
+    // 7 — safety layer (always last before send)
     applyMotorSafety();
 
-    // 7 — send FOC command every 20ms
+    // 8 — send FOC command every 20ms
     if (HAL_GetTick() - lastHBSend >= 20) {
       lastHBSend = HAL_GetTick();
       sendFOC(cmdSteer, cmdSpeed);
     }
 
-    // 8 — send telemetry every 100ms
+    // 9 — send telemetry every 100ms
     if (HAL_GetTick() - lastTelSend >= 100) {
       lastTelSend = HAL_GetTick();
       sendTelemetry();
     }
 
-    // 9 — heartbeat with fade
+    // 10 — heartbeat with fade
     // DUM-dum then slow fade to off
     static uint32_t beatTimer = 0;
     static uint8_t  beatPhase = 0;

@@ -64,6 +64,12 @@ by USB:
 python3 tools/uno_probe.py
 ```
 
+The matching Arduino firmware lives at:
+
+```text
+arduino/uno_lcd_face/uno_lcd_face.ino
+```
+
 If the auto-scan finds the wrong port, run with an explicit port:
 
 ```bash
@@ -86,7 +92,7 @@ commands.
 
 ## Phase 3 - Operator Website Shell
 
-Run the PLUTO operator console shell:
+Run the PLUTO Mission Control operator console:
 
 ```bash
 python3 -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
@@ -104,8 +110,26 @@ Expected pass evidence:
 WEB_SHELL_SMOKE PASS
 ```
 
-The website shell displays system state and hardware status, blocks unavailable
-motion states, and exposes emergency stop. It does not expose raw motor routes.
+The website shell displays a production-style mission readiness strip, system
+state, hardware status, blocked/allowed transitions, logs, dry-run evidence,
+and emergency stop. It does not expose raw motor routes.
+
+Tablet robot face:
+
+```text
+http://<pi-ip>:8080/face
+```
+
+Open this full-screen on the Samsung tablet mounted in Pluto's head. The page
+renders a large animated face, follows PLUTO state from `/api/status`, and shows
+filtered IMU attitude when STM32 IMU telemetry is live. The face page is
+display-only except for a visible STOP button, which calls the same safe
+emergency-stop endpoint as the operator console.
+
+Runtime IMU handling now reuses the useful parts of `PlutoIMU_Visualizer`:
+50-sample static calibration, a 0.5 deg/s gyro dead-zone, accelerometer EMA
+low-pass smoothing with factor 0.1, and Madgwick 6-DOF fusion with beta 0.04.
+The airplane visualization was intentionally not imported.
 
 ## Phase 4 - Camera Feed And Human Detection
 
