@@ -86,16 +86,28 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin : PB0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 ARM2_STEP_Pin ARM2_DIR_Pin ARM2_EN_Pin
-                           IMU_SCL_Pin IMU_SDA_Pin PB8 PB9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|ARM2_STEP_Pin|ARM2_DIR_Pin|ARM2_EN_Pin
-                          |IMU_SCL_Pin|IMU_SDA_Pin|GPIO_PIN_8|GPIO_PIN_9;
+  /*Configure GPIO pins : PB10 ARM2_EN_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|ARM2_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : IMU_SCL_Pin IMU_SDA_Pin */
+  GPIO_InitStruct.Pin = IMU_SCL_Pin|IMU_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ARM2_STEP_Pin ARM2_DIR_Pin PB8 PB9 */
+  GPIO_InitStruct.Pin = ARM2_STEP_Pin|ARM2_DIR_Pin|GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }

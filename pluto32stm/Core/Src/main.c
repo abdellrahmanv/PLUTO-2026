@@ -121,9 +121,9 @@ typedef struct {
 // TB6600 simple/direct-drive mode:
 // STM32 STEP/DIR pins go to PUL+/DIR+, and PUL-/DIR- go to GND.
 // Keep the STEP pulse wide enough for optocoupler inputs.
-#define STEPPER_PULSE_US       10U
+#define STEPPER_PULSE_US       50U
 #define STEPPER_COMMON_ANODE   0U
-#define STEPPER_EN_USED        0U
+#define STEPPER_EN_USED        1U
 
 #if STEPPER_COMMON_ANODE
 #define STEPPER_STEP_ACTIVE    GPIO_PIN_RESET
@@ -612,6 +612,7 @@ void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps) {
   }
 
   stepperEnable(arm);
+  lastStepTime_us[idx] = micros();
   stepperRunning[idx] = 1;
 }
 

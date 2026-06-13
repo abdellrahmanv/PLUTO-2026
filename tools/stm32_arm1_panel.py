@@ -36,8 +36,8 @@ class PanelState:
     last_ack: str = "none"
     last_alert: str = "none"
     last_command: str = "none"
-    arm_steps: int = 100
-    arm_speed: int = 200
+    arm_steps: int = 800
+    arm_speed: int = 50
     raw_mode: bool = False
 
 
@@ -197,8 +197,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=None, help="Serial port, e.g. COM8 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--steps", type=int, default=100)
-    parser.add_argument("--speed", type=int, default=200)
+    parser.add_argument("--steps", type=int, default=800)
+    parser.add_argument("--speed", type=int, default=50)
     args = parser.parse_args()
 
     port = find_port(args.port)
