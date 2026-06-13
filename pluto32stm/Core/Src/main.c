@@ -118,11 +118,11 @@ typedef struct {
 #define EN2_PORT            GPIOB
 #define EN2_PIN_NUM         GPIO_PIN_14
 
-// TB6600 simple/direct-drive mode:
-// STM32 STEP/DIR pins go to PUL+/DIR+, and PUL-/DIR- go to GND.
+// TB6600 common-anode mode:
+// PUL+/DIR+/ENA+ go to 5V. STM32 STEP/DIR/EN pins drive PUL-/DIR-/ENA-.
 // Keep the STEP pulse wide enough for optocoupler inputs.
 #define STEPPER_PULSE_US       50U
-#define STEPPER_COMMON_ANODE   0U
+#define STEPPER_COMMON_ANODE   1U
 #define STEPPER_EN_USED        1U
 
 #if STEPPER_COMMON_ANODE
