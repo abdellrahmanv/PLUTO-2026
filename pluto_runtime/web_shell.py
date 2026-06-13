@@ -104,10 +104,10 @@ class ManualRuntime:
     max_steer: int = 80
     base_speed_setting: int = 150
     base_steer_setting: int = 80
-    arm_step_setting: int = 100
-    arm_speed_setting: int = 200
-    max_arm_steps: int = 1200
-    max_arm_speed: int = 1000
+    arm_step_setting: int = 5000
+    arm_speed_setting: int = 800
+    max_arm_steps: int = 10000
+    max_arm_speed: int = 3000
     command_period_ms: int = 150
     last_command_at: float | None = None
     last_release_at: float | None = None
@@ -2592,10 +2592,10 @@ def html_page() -> str:
         <div class="manual-controls">
           <div class="manual-arm-settings">
             <label>Arm steps
-              <input id="manualArmSteps" type="number" min="1" max="1200" step="10" value="100">
+              <input id="manualArmSteps" type="number" min="1" max="10000" step="10" value="5000">
             </label>
             <label>Arm speed
-              <input id="manualArmSpeed" type="number" min="1" max="1000" step="10" value="200">
+              <input id="manualArmSpeed" type="number" min="1" max="3000" step="10" value="800">
             </label>
           </div>
           <div class="manual-arm-grid">
@@ -3566,10 +3566,10 @@ def html_page() -> str:
       document.getElementById('manualBaseSteerValue').textContent = baseSteer.value;
       const armSteps = document.getElementById('manualArmSteps');
       const armSpeed = document.getElementById('manualArmSpeed');
-      armSteps.max = manual.max_arm_steps || 1200;
-      armSpeed.max = manual.max_arm_speed || 1000;
-      if (document.activeElement !== armSteps) armSteps.value = manual.arm_step_setting || 100;
-      if (document.activeElement !== armSpeed) armSpeed.value = manual.arm_speed_setting || 200;
+      armSteps.max = manual.max_arm_steps || 10000;
+      armSpeed.max = manual.max_arm_speed || 3000;
+      if (document.activeElement !== armSteps) armSteps.value = manual.arm_step_setting || 5000;
+      if (document.activeElement !== armSpeed) armSpeed.value = manual.arm_speed_setting || 800;
       const lastArm = manual.last_arm_command || null;
       document.getElementById('manualArmLast').textContent = lastArm && lastArm.arm
         ? `arm${{lastArm.arm}} ${{lastArm.steps}} steps @ ${{lastArm.speed}}`
@@ -3736,10 +3736,10 @@ def html_page() -> str:
       await refresh();
     }}
     async function manualArm(arm, direction) {{
-      const maxSteps = Number(document.getElementById('manualArmSteps').max || 1200);
-      const maxSpeed = Number(document.getElementById('manualArmSpeed').max || 1000);
-      const steps = numericInput('manualArmSteps', 100, 1, maxSteps) * direction;
-      const speed = numericInput('manualArmSpeed', 200, 1, maxSpeed);
+      const maxSteps = Number(document.getElementById('manualArmSteps').max || 10000);
+      const maxSpeed = Number(document.getElementById('manualArmSpeed').max || 3000);
+      const steps = numericInput('manualArmSteps', 5000, 1, maxSteps) * direction;
+      const speed = numericInput('manualArmSpeed', 800, 1, maxSpeed);
       await api('/api/manual/arm', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
