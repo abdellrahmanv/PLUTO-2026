@@ -105,8 +105,8 @@ class ManualRuntime:
     base_speed_setting: int = 150
     base_steer_setting: int = 80
     arm_step_setting: int = 5000
-    arm_speed_setting: int = 800
-    max_arm_steps: int = 10000
+    arm_speed_setting: int = 2500 
+    max_arm_steps: int = 12000
     max_arm_speed: int = 3000
     command_period_ms: int = 150
     last_command_at: float | None = None
