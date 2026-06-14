@@ -261,10 +261,15 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
-	  extern uint8_t  usbRxBuf[64];
-	  extern uint32_t usbRxLen;
-	  memcpy(usbRxBuf, Buf, *Len);
-	  usbRxLen = *Len;
+#define USB_RING_SIZE  256
+#define USB_RING_MASK  (USB_RING_SIZE - 1)
+      extern volatile uint8_t  usbRing[USB_RING_SIZE];
+      extern volatile uint16_t usbRingHead;
+
+      for (uint32_t i = 0; i < *Len; i++) {
+          usbRing[usbRingHead & USB_RING_MASK] = Buf[i];
+          usbRingHead++;
+      }
 
 	  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
 	  USBD_CDC_ReceivePacket(&hUsbDeviceFS);

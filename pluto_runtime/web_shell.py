@@ -648,7 +648,7 @@ class PlutoWebContext:
             "blocked_reason": self.manual.blocked_reason,
         }
 
-    def manual_arm(self, arm: int, steps: int, speed: int) -> dict[str, Any]:
+    def manual_arm(self, arm: int, steps: int, speed: int, accel: int = 0) -> dict[str, Any]:
         if self.mode_manager.current_state != "MANUAL" or not self.manual.enabled:
             result = {"accepted": False, "reason": "manual arm controls are only active in MANUAL"}
             self.manual.blocked_reason = result["reason"]
@@ -669,9 +669,9 @@ class PlutoWebContext:
 
         started = time.monotonic()
         if arm_num == 2:
-            serial_result = self.stm32_link.send_arm2(clamped_steps, clamped_speed)
+            serial_result = self.stm32_link.send_arm2(clamped_steps, clamped_speed, accel=int(accel))
         else:
-            serial_result = self.stm32_link.send_arm(clamped_steps, clamped_speed)
+            serial_result = self.stm32_link.send_arm(clamped_steps, clamped_speed, accel=int(accel))
         elapsed_ms = (time.monotonic() - started) * 1000.0
 
         result = {
@@ -2597,12 +2597,19 @@ def html_page() -> str:
             <label>Arm speed
               <input id="manualArmSpeed" type="number" min="1" max="3000" step="10" value="800">
             </label>
+            <label>Accel (sps²)
+              <input id="manualArmAccel" type="number" min="0" max="3000" step="50" value="0">
+            </label>
           </div>
           <div class="manual-arm-grid">
             <button data-arm="1" data-arm-dir="1">Arm1 +</button>
             <button data-arm="1" data-arm-dir="-1">Arm1 -</button>
             <button data-arm="2" data-arm-dir="1">Arm2 +</button>
             <button data-arm="2" data-arm-dir="-1">Arm2 -</button>
+          </div>
+          <div class="manual-arm-grid" style="margin-top:6px">
+            <button id="arm90test1" class="primary">Arm1 90° Test</button>
+            <button id="arm90test2" class="primary">Arm2 90° Test</button>
           </div>
         </div>
       </section>
@@ -3740,10 +3747,11 @@ def html_page() -> str:
       const maxSpeed = Number(document.getElementById('manualArmSpeed').max || 3000);
       const steps = numericInput('manualArmSteps', 5000, 1, maxSteps) * direction;
       const speed = numericInput('manualArmSpeed', 800, 1, maxSpeed);
+      const accel = numericInput('manualArmAccel', 0, 0, 3000);
       await api('/api/manual/arm', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{arm, steps, speed}})
+        body: JSON.stringify({{arm, steps, speed, accel}})
       }});
       await refresh();
     }}
@@ -3775,6 +3783,34 @@ def html_page() -> str:
       btn.addEventListener('click', async () => {{
         await manualArm(Number(btn.dataset.arm), Number(btn.dataset.armDir));
       }});
+    }});
+    document.getElementById('arm90test1').addEventListener('click', async () => {{
+      await api('/api/manual/arm', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{arm: 1, steps: 400, speed: 200, accel: 100}})
+      }});
+      setTimeout(async () => {{
+        await api('/api/manual/arm', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{arm: 1, steps: -400, speed: 200, accel: 100}})
+        }});
+      }}, 3500);
+    }});
+    document.getElementById('arm90test2').addEventListener('click', async () => {{
+      await api('/api/manual/arm', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{arm: 2, steps: 400, speed: 200, accel: 100}})
+      }});
+      setTimeout(async () => {{
+        await api('/api/manual/arm', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{arm: 2, steps: -400, speed: 200, accel: 100}})
+        }});
+      }}, 3500);
     }});
     ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(name => {{
       document.addEventListener(name, () => {{
@@ -4411,6 +4447,7 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                         int(body.get("arm", 1)),
                         int(body.get("steps", 0)),
                         int(body.get("speed", 0)),
+                        int(body.get("accel", 0)),
                     ),
                 )
                 return
