@@ -2,9 +2,9 @@
 
 Status: implemented, local smoke validated
 
-Last updated: 2026-05-27
+Last updated: 2026-06-09
 
-Last validated: 2026-05-27 local smoke test; Raspberry Pi camera mic/Piper probe recorded in `AUD-001_audio_io_v1.md`
+Last validated: 2026-06-09 local smoke test; Raspberry Pi camera mic/Piper probe recorded in `AUD-001_audio_io_v1.md`
 
 Owner: Pluto systems engineering
 
@@ -20,6 +20,7 @@ AUD-015
 AUD-016
 AUD-018
 AUD-019
+AUD-022
 STATE-3.33
 STATE-3.33.1
 STATE-3.33.2
@@ -27,8 +28,11 @@ STATE-3.33.3
 STATE-3.33.4
 STATE-3.33.5
 STATE-3.33.6
+STATE-3.33.9
+STATE-3.33.10
 STATE-3.33.11
 STATE-3.33.12
+STATE-3.33.13
 STATE-3.35
 STATE-3.37
 ```
@@ -58,6 +62,11 @@ pluto_runtime/welcome_talk.py
 This was chosen because Pluto needs small latency more than perfect language
 understanding. Ollama/Qwen remains a v1.5 fallback candidate only after a
 benchmark gate.
+
+The 2026-06-09 talk expansion keeps the same non-LLM architecture but adds an
+alias-assisted word matcher and deterministic script bank. This lets Pluto
+answer more naturally around demo, safety, sensors, deployment, and presentation
+topics without introducing unbounded generation.
 
 ## Interfaces
 
@@ -107,7 +116,7 @@ POST /api/welcome/talk
   -> set substate WELCOME_TALK
   -> normalize text
   -> enforce <= 9 input words
-  -> keyword/fuzzy match
+  -> keyword/script/fuzzy match
   -> return <= 9 output words
   -> log response source and latency
 ```
@@ -124,6 +133,18 @@ interaction: greeting, goodbye, thanks, welcome wave, approach
 personality: feeling, alive, happy, jokes, favorites, dreams
 debug: tests, requirements, logs, confidence, noise
 audio: microphone, headset/webcam mic, speaker, local/offline speech
+deployment: Pi service, Wi-Fi portal, production readiness, branching
+script bank: demo open/close, system, safety, sensors, modes, judges
+matching method: exact keywords, alias groups, scripted lines, fuzzy fallback
+```
+
+Current bank size validated by smoke test:
+
+```text
+intent_count >= 180
+script_count >= 30
+response_bank_size >= 210
+alias_group_count >= 20
 ```
 
 Exact demo facts locked by smoke tests:
@@ -166,7 +187,7 @@ Checklist:
 2. Confirm current state is `WELCOME`; otherwise talk is rejected.
 3. Confirm `stop_guard.ok` is true before trusting TALK output.
 4. Check `talk.last_result.response_source`.
-5. If the response is wrong, add a trigger to `INTENT_RULES`.
+5. If the response is wrong, add a trigger to `INTENT_RULES` or `SCRIPT_RULES`.
 6. If input is blocked, check `input_words`.
 
 Useful commands:
@@ -180,9 +201,11 @@ Bank audit:
 
 ```bash
 python - <<'PY'
-from pluto_runtime.welcome_talk import INTENT_RULES
+from pluto_runtime.welcome_talk import INTENT_RULES, SCRIPT_RULES
 for rule in INTENT_RULES:
     print(rule.intent, "=>", rule.response)
+for rule in SCRIPT_RULES:
+    print(rule.script, rule.step, "=>", rule.response)
 PY
 ```
 
@@ -205,6 +228,15 @@ reason=input_too_long
 response="Short question please."
 ```
 
+Scripted prompt:
+
+```text
+input="demo script"
+response_source=script
+intent=script_demo_opening
+response="Welcome. I am Pluto, your graduation robot."
+```
+
 ## Verification Tests
 
 | Test ID | Method | Expected Result | Last Result |
@@ -215,6 +247,8 @@ response="Short question please."
 | VER-TALK-005 | No internet/API keys | engine imports no cloud dependency | local pass |
 | VER-TALK-006 | Demo fact prompts | location/builders/weather exact answers | local pass |
 | VER-TALK-007 | MSA knowledge prompts | official MSA facts answer locally | local pass |
+| VER-TALK-008 | Script prompt | `script`, answer <= 9 words | 2026-06-09 local pass |
+| VER-TALK-009 | Matching-method prompt | local alias/script/fuzzy method explained | 2026-06-09 local pass |
 
 ## Failure Modes
 
@@ -224,6 +258,7 @@ response="Short question please."
 | Stop ACK buried | Alert/telemetry flood from STM32 | Check `stop_guard.degraded` and speed telemetry | Speech-only TALK may continue |
 | Stop guard fails | STM32 disconnected or nonzero speed | Check `stop_guard.attempts` and STM32 runtime | Fix STM32 link before TALK |
 | Wrong answer | Missing trigger or STT error | Check `normalized_text` and `score` | Add trigger or response |
+| Over-broad alias | Alias group matches too much | Check `response_source`, `score`, and trigger | Add specific trigger or tighten alias |
 | Long input blocked | More than 9 words | Check `input_words` | Ask shorter question |
 
 ## Safety Notes
@@ -244,3 +279,4 @@ when STM32 is alive and speed telemetry is zero.
 | 2026-05-27 | Initial implementation memory | WELCOME_TALK v1 answer engine added |
 | 2026-05-27 | Expanded demo bank | Add MSA University, builders, weather, safety, and interaction facts |
 | 2026-05-27 | Added MSA knowledge bank | Add short official-source facts about MSA University |
+| 2026-06-09 | Added scripted matching bank | Make talk feel richer without enabling an LLM |

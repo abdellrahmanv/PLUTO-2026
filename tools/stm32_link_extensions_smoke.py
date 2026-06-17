@@ -302,7 +302,7 @@ def test_existing_acks_still_work() -> None:
 
 
 def test_telemetry_and_obs_still_work() -> None:
-    """TEL: and OBS: lines must still parse correctly."""
+    """TEL:, OBS:, and IMU: lines must still parse correctly."""
     link = Stm32SerialLink("COM_FAKE", baud=115200)
     link._handle_line("TEL:BAT:36.2,SPD:0.0,DIST:0,TEMP:28.5,X:12.5,Y:-4.0,H:90.0,HOME:15.2,RET:1")
     assert link._status.telemetry.get("BAT") == 36.2
@@ -315,7 +315,12 @@ def test_telemetry_and_obs_still_work() -> None:
     link._handle_line("OBS:FL:120,F:95,FR:200")
     assert link._status.obstacles.get("F") == 95.0
     assert link._status.obstacles.get("FL") == 120.0
-    print("  telemetry_and_obs PASS")
+    link._handle_line("IMU:OK:1,ADDR:0x68,WHO:0x68,AX:1,AY:-2,AZ:16384,GX:4,GY:5,GZ:-6,TEMP:27.5")
+    assert link._status.imu.get("OK") == 1.0
+    assert link._status.imu.get("ADDR") == "0x68"
+    assert link._status.imu.get("AZ") == 16384.0
+    assert link._status.imu.get("GZ") == -6.0
+    print("  telemetry_obs_imu PASS")
 
 
 def test_alerts_still_work() -> None:

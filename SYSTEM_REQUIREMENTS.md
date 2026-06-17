@@ -190,6 +190,9 @@ STM32 safety layer.
 | WEB-023 | Website shall remain responsive enough for operator use while camera preview is active. | Pi | UI latency test |
 | WEB-024 | Website shall be usable from phone or laptop screen sizes. | Pi | Responsive UI test |
 | WEB-025 | Website shall present state names using the same names as requirements: BOOTSTRAP, IDLE, MANUAL, WELCOME, DANCE, ERROR, GAME_LATER. | Pi | UI inspection |
+| WEB-026 | Website shall provide a launch and monitor view with a local 3D robot visualization that can run without an external CDN at runtime. | Pi | 3D/static asset UI test |
+| WEB-027 | Before final deployment, Raspberry Pi shall provide a robot Wi-Fi access point or captive portal flow that opens or redirects joined operator devices to the PLUTO website, similar to university Wi-Fi login pages. | Pi + Network | Captive portal field test |
+| WEB-028 | Website shall provide a persisted operator theme selector with Auto, Dark, and Light modes. | Pi | Theme selector UI test |
 
 ### Website Timing Requirements
 
@@ -208,6 +211,7 @@ STM32 safety layer.
 | WEB-SAFE-002 | Website shall not allow MANUAL, WELCOME, or DANCE if STM32 is unavailable. | Pi | Safety gate test |
 | WEB-SAFE-003 | Website shall not allow MANUAL, WELCOME, or DANCE if battery status is critical. | Pi | Battery gate test |
 | WEB-SAFE-004 | Website shall not allow new mode selection during WELCOME_RETURN except emergency stop. | Pi | Return gate test |
+| WEB-SAFE-005 | Captive portal auto-open shall not grant motion authority, bypass authentication if configured, or bypass any mode-manager, emergency-stop, or STM32 safety gate. | Pi + Network | Captive portal safety review |
 
 ## Audio And Speech Requirements
 
@@ -826,6 +830,7 @@ WELCOME_DONE
 | STATE-3.33.10 | Website WELCOME_TALK shall support text ask, ask-and-speak, and camera-mic listen controls. | Pi | UI/API test |
 | STATE-3.33.11 | WELCOME_TALK v1 shall answer configured demo identity facts exactly, including location, builders, and simple weather. | Pi | Response bank test |
 | STATE-3.33.12 | WELCOME_TALK v1 shall include an offline MSA University knowledge bank sourced from official university pages. | Pi | MSA response bank test |
+| STATE-3.33.13 | WELCOME_TALK v1 shall include deterministic scripted demo/presentation lines and alias-assisted word matching while remaining non-LLM. | Pi | Script bank response test |
 
 ### WELCOME_TALK Version Roadmap
 
@@ -1084,6 +1089,9 @@ GAME_LATER is not implemented in v1.
 | VER-WEB-008 | View bootstrap report from website. | hardware pass/fail and suggested actions visible |
 | VER-WEB-009 | Open website on phone viewport. | controls and status readable without overlap |
 | VER-WEB-010 | Verify manual raw motor routes are unavailable outside MANUAL. | rejected request |
+| VER-WEB-011 | Open launch monitor page with no internet connection. | local 3D robot visualization and launch gate render |
+| VER-WEB-012 | Join the Raspberry Pi deployment Wi-Fi network from a phone/tablet. | captive portal opens or redirects to PLUTO website without granting motion authority |
+| VER-WEB-013 | Toggle website theme to Dark and reload. | dark theme remains selected and readable |
 
 ## Audio Verification Plan
 
@@ -1224,6 +1232,9 @@ GAME_LATER is not implemented in v1.
 | WEB-023 | WEB-TIME-001, WEB-TIME-003 | UI latency test |
 | WEB-024 | operator usability | `VER-WEB-009` |
 | WEB-025 | state naming | UI inspection |
+| WEB-026 | SYS-011 | `VER-WEB-011` |
+| WEB-027 | SYS-011, BOOT-008, WEB-SAFE-005 | `VER-WEB-012` |
+| WEB-028 | operator usability | `VER-WEB-013` |
 
 ## Feature-Memory-To-Test Trace
 
@@ -1269,6 +1280,7 @@ GAME_LATER is not implemented in v1.
 | AUD-019 | STATE-3.33.6 | offline run test |
 | AUD-020 | STATE-3.33.8 | benchmark review |
 | AUD-021 | STATE-3.33.7 | response source log |
+| AUD-022 | STATE-3.33.13 | script bank response test |
 
 ## Arm-To-Test Trace
 

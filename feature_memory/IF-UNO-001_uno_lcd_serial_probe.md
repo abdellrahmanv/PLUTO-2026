@@ -1,8 +1,8 @@
 # Feature Memory: Uno LCD Serial Probe
 
-Status: implemented, awaiting hardware validation
+Status: firmware implemented, awaiting hardware validation
 
-Last updated: 2026-05-26
+Last updated: 2026-06-08
 
 Last validated: not yet validated on hardware
 
@@ -43,10 +43,15 @@ path is ready and traceable.
 
 ## Design Decision
 
-The implementation is a standalone Python CLI tool at `tools/uno_probe.py`.
-It scans serial ports, waits for the Arduino USB reset window, identifies
-`ID:UNO_LCD`, sends a small set of face/mode/text commands, and requires ACK
-responses.
+The implementation includes:
+
+- a standalone Python CLI tool at `tools/uno_probe.py`
+- Arduino face firmware at `arduino/uno_lcd_face/uno_lcd_face.ino`
+
+The probe scans serial ports, waits for the Arduino USB reset window,
+identifies `ID:UNO_LCD`, sends a small set of face/mode/text commands, and
+requires ACK responses. The firmware draws animated LCD expressions and keeps
+the protocol bounded to display-only behavior.
 
 This is separate from the website and mode manager because the display
 controller must be independently validated before IDLE, WELCOME, DANCE, or
@@ -75,7 +80,7 @@ External dependencies:
 
 - Python 3.
 - `pyserial`.
-- Uno firmware that speaks Pluto LCD protocol.
+- Uno firmware at `arduino/uno_lcd_face/uno_lcd_face.ino`.
 - LCD connected to Uno for visual verification.
 
 ## Configuration
@@ -206,13 +211,15 @@ but must not affect STM32 motor safety.
 
 ## Open Questions
 
-- Should Uno ACK format be short (`ACK:FACE`) or include full command
-  (`ACK:FACE:HAPPY`)?
+- Resolved: Uno returns full ACKs such as `ACK:FACE:HAPPY`. The probe still
+  accepts short ACKs for backwards compatibility.
 - Should Uno report firmware/protocol version with its identity?
-- Which exact LCD library and display size will be used?
+- Resolved for current RAM Electronics LCD: use `MCUFRIEND_kbv` with
+  `Adafruit_GFX` for the 480x320 ILI9486/ST7796-style 8-bit shield.
 
 ## Change History
 
 | Date | Change | Reason |
 | --- | --- | --- |
+| 2026-06-08 | Added dynamic Arduino LCD face firmware | Supports the RAM Electronics 3.5 inch TFT shield and Pluto serial protocol |
 | 2026-05-26 | Initial implementation memory | Phase 2 initiated before LCD hardware arrives |

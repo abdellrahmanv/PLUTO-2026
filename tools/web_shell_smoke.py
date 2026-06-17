@@ -53,6 +53,7 @@ def main() -> int:
             HOST,
             "--port",
             str(PORT),
+            "--camera-disabled",
             "--wave-pose-disabled",
         ],
         stdout=subprocess.PIPE,
@@ -65,6 +66,52 @@ def main() -> int:
         home_status, home = request("/")
         assert home_status == 200, home_status
         assert b"PLUTO" in home, "PLUTO project identity missing"
+        assert b"PLUTO Mission Control" in home, "production mission console title missing"
+        assert b'id="themeMode"' in home, "theme selector missing"
+        assert b"pluto-theme" in home, "theme persistence key missing"
+        assert b'data-theme' in home, "theme boot script missing"
+        assert b'id="missionSafety"' in home, "mission safety strip missing"
+        assert b"Tablet Face" in home, "tablet face link missing"
+        assert b"CAD Vehicle Digital Twin" in home, "CAD-backed 3D monitor label missing"
+        assert b"Launch & Monitor Unit" in home, "3D launch monitor title missing"
+        assert b'id="pluto3dCanvas"' in home, "3D vehicle monitor canvas missing"
+        assert b"Launch Gate" in home, "launch readiness gate missing"
+        assert b"Operations Readiness" in home, "operator readiness summary missing"
+        assert b"Mode Command Matrix" in home, "mode command matrix missing"
+        assert b"Systems Rack" in home, "hardware systems rack missing"
+        assert b"Sensor Intelligence" in home, "sensor interpretation deck missing"
+        assert b"Range Radar & Occupancy Corridor" in home, "advanced sensor range map missing"
+        assert b"Nearest Object" in home, "readable sensor nearest-object card missing"
+        assert b"Sensor Confidence" in home, "sensor confidence readout missing"
+        assert b"Mode-Adaptive Guard" in home, "mode-aware sensor guard missing"
+        assert b"Dance Envelope Map" in home, "advanced dance envelope map missing"
+        assert b'id="talkBank"' in home, "welcome talk bank metric missing"
+        assert b"Mission Log" in home, "mission log summary missing"
+
+        js_status, js_body = request("/static/pluto_3d.js")
+        assert js_status == 200, js_status
+        assert b"Pluto3D" in js_body, "3D monitor module missing"
+
+        three_status, three_body = request("/static/three.module.min.js")
+        assert three_status == 200, three_status
+        assert len(three_body) > 100000, "local Three.js runtime missing or truncated"
+
+        core_status, core_body = request("/static/three.core.min.js")
+        assert core_status == 200, core_status
+        assert len(core_body) > 100000, "local Three.js core runtime missing or truncated"
+
+        loader_status, loader_body = request("/static/STLLoader.js")
+        assert loader_status == 200, loader_status
+        assert b"STLLoader" in loader_body, "local STL loader missing"
+
+        mesh_status, mesh_body = request("/static/robot_meshes/base_link.STL")
+        assert mesh_status == 200, mesh_status
+        assert len(mesh_body) > 100000, "CAD base mesh missing or truncated"
+
+        face_status, face = request("/face")
+        assert face_status == 200, face_status
+        assert b"PLUTO Face" in face, "tablet robot face route missing"
+        assert b'id="faceStop"' in face, "tablet face emergency stop missing"
 
         status_code, raw_status = request("/api/status")
         assert status_code == 200, status_code
@@ -84,6 +131,10 @@ def main() -> int:
         assert status["dance"]["dry_run"] is True
         assert status["wave"]["detector_status"] in {"tracked_pose_wave", "tracked_pc_rule_lite", "simple_box_motion"}
         assert "talk" in status
+        assert status["talk"]["intent_count"] >= 180
+        assert status["talk"]["script_count"] >= 30
+        assert status["talk"]["response_bank_size"] >= 210
+        assert status["talk"]["alias_group_count"] >= 20
         assert "audio" in status
         assert "allowed_next_states" in status
         assert "transition_log" in status["mode_manager"]
@@ -92,6 +143,8 @@ def main() -> int:
         assert camera_code == 200, camera_code
         camera = json.loads(raw_camera.decode("utf-8"))
         assert "available" in camera
+        assert camera["running"] is False
+        assert camera["error"] == "camera disabled by operator"
 
         audio_code, raw_audio = request("/api/audio/status")
         assert audio_code == 200, audio_code
