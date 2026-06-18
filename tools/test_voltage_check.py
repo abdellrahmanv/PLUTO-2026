@@ -28,8 +28,8 @@ ser.reset_input_buffer()
 
 # 3. Run motor test - slow speed, lots of steps
 print("\n=== MOTOR TEST ===")
-print("Sending CMD:ARM:200,20 (200 steps, 20 sps, ~10 seconds)")
-ser.write(b"CMD:ARM:200,20\n")
+print("Sending CMD:ARM:200,2000 (200 steps, 2000 sps)")
+ser.write(b"CMD:ARM:200,2000\n")
 start = time.monotonic()
 while time.monotonic() - start < 15:
     line = ser.readline().decode(errors="replace").strip()

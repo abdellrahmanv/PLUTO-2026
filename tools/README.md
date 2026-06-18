@@ -92,6 +92,44 @@ commands.
 
 ## Phase 3 - Operator Website Shell
 
+Fast PowerShell path from the repository root on the Raspberry Pi:
+
+```powershell
+.\tools\start_website.ps1
+```
+
+This script replaces the usual manual sequence of changing directories,
+choosing the Python interpreter, running `tools/web_shell_smoke.py`, and then
+starting `pluto_runtime.web_shell`. It caches a successful website smoke result
+for the current website code, but it still runs the safe STM32 hardware fast
+test every time by default before opening the site.
+
+Default hardware gate:
+
+```text
+tools/stm32_probe.py
+tools/idle_runtime_smoke.py --require-hardware
+```
+
+These checks detect the STM32 and send only safe `CMD:PING` and `CMD:STOP`
+commands. The website is not started if the required STM32 check fails.
+
+Useful options:
+
+```powershell
+.\tools\start_website.ps1 -OpenBrowser
+.\tools\start_website.ps1 -SkipValidation
+.\tools\start_website.ps1 -ValidateOnly
+.\tools\start_website.ps1 -UiOnly
+.\tools\start_website.ps1 -Python C:\Path\To\python.exe
+```
+
+If Windows blocks local PowerShell scripts, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\start_website.ps1
+```
+
 Run the PLUTO Mission Control operator console:
 
 ```bash
@@ -104,15 +142,53 @@ Smoke test:
 python3 tools/web_shell_smoke.py
 ```
 
+Validation Center smoke test:
+
+```bash
+python3 tools/validation_center_smoke.py
+```
+
 Expected pass evidence:
 
 ```text
 WEB_SHELL_SMOKE PASS
+VALIDATION_CENTER_SMOKE PASS
 ```
 
 The website shell displays a production-style mission readiness strip, system
 state, hardware status, blocked/allowed transitions, logs, dry-run evidence,
 and emergency stop. It does not expose raw motor routes.
+
+## Stage 1 - Validation Center
+
+The operator website includes a `Validation Center` section that exposes only
+existing validation tools. Buttons are disabled when their required hardware is
+not detected. Stage 1 motion entries are dry-run only.
+
+Website test commands:
+
+```bash
+python3 tools/stm32_probe.py
+python3 tools/idle_runtime_smoke.py --require-hardware
+python3 tools/uno_probe.py
+python3 tools/welcome_approach_smoke.py
+python3 tools/dance_smoke.py
+python3 tools/welcome_wave_smoke.py
+python3 tools/audio_io_smoke.py --require-speaker
+python3 tools/audio_io_smoke.py --require-microphone
+python3 tools/welcome_talk_smoke.py
+python3 tools/error_state_smoke.py
+python3 tools/web_shell_smoke.py
+python3 tools/mode_manager_smoke.py
+python3 tools/idle_runtime_smoke.py
+```
+
+Useful endpoints:
+
+```text
+/api/validation/catalog
+/api/validation/run
+```
 
 Tablet robot face:
 

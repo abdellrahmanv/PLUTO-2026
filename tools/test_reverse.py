@@ -29,7 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=None, help="Example: COM8")
     parser.add_argument("--steps", type=int, default=5000)
-    parser.add_argument("--speed", type=int, default=800)
+    parser.add_argument("--speed", type=int, default=2000)
     parser.add_argument("--baud", type=int, default=115200)
     args = parser.parse_args()
 
@@ -66,8 +66,9 @@ def main() -> int:
                 print(f"RX {line}")
 
     def move(steps: int) -> None:
-        seconds = abs(steps) / max(args.speed, 1) + 1.5
-        command = f"CMD:ARM:{steps},{args.speed}"
+        speed = max(2000, min(3000, args.speed))
+        seconds = abs(steps) / speed + 1.5
+        command = f"CMD:ARM:{steps},{speed}"
         print(f"SEND {command}")
         ser.write((command + "\n").encode())
         read_for(seconds)

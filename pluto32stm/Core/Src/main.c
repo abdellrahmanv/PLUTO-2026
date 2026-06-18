@@ -139,6 +139,11 @@ typedef struct {
 
 #define STEPPER_EN_ACTIVE      GPIO_PIN_RESET
 #define STEPPER_EN_IDLE        GPIO_PIN_SET
+#define STEPPER_MIN_SPS        2000U
+#define STEPPER_MAX_SPS        3000U
+#define STEPPER_MAX_STEPS      12000L
+#define USB_RX_RING_SIZE       256U
+#define USB_RX_RING_MASK       (USB_RX_RING_SIZE - 1U)
 
 #define EMERG_PORT          GPIOB
 #define EMERG_PIN           GPIO_PIN_0
@@ -223,8 +228,11 @@ uint8_t  ledState         = 0;
 // ── RPi serial buffer ───────────────────────────────────────
 char     rpiBuffer[64];
 uint8_t  rpiIdx           = 0;
-uint8_t  usbRxBuf[64];
-uint32_t usbRxLen         = 0;
+uint8_t  rpiDiscardUntilEol = 0;
+volatile uint8_t  usbRxRing[USB_RX_RING_SIZE];
+volatile uint16_t usbRxHead = 0;
+volatile uint16_t usbRxTail = 0;
+volatile uint8_t  usbRxOverflow = 0;
 
 /* USER CODE END PV */
 
@@ -249,6 +257,7 @@ float distanceToHome(void);
 void navigateToHome(void);
 void parseCommand(char* cmd);
 void readRPi(void);
+uint8_t parseArmPayload(const char* payload, int32_t* steps, uint32_t* speed_sps);
 void sendTelemetry(void);
 void sendUSB(const char* msg);
 uint8_t imuInit(void);
@@ -589,9 +598,8 @@ void stepperMove(uint8_t arm, int32_t steps, uint32_t speed_sps) {
   if (arm < 1 || arm > 2) arm = 1;
   uint8_t idx = arm - 1;
 
-  // steps and speed are intentionally variable. Pi decides bounded values.
-  if (speed_sps == 0) speed_sps = 200;
-  if (speed_sps > 3000) speed_sps = 3000; // firmware hard ceiling
+  if (speed_sps < STEPPER_MIN_SPS) speed_sps = STEPPER_MIN_SPS;
+  if (speed_sps > STEPPER_MAX_SPS) speed_sps = STEPPER_MAX_SPS;
   stepInterval_us[idx] = 1000000UL / speed_sps;
   stepsTarget[idx]     = labs(steps);
   stepsCount[idx]      = 0;
@@ -671,6 +679,7 @@ void applyMotorSafety(void) {
     }
     cmdSpeed = 0;
     cmdSteer = 0;
+    stepperStopAll();
   } else {
     piTimedOut = 0;
   }
@@ -746,11 +755,58 @@ void navigateToHome(void) {
 }
 
 // ── RPi command parser ───────────────────────────────────────
-void parseCommand(char* cmd) {
-  lastRPiCmd = HAL_GetTick();
-  emergStop  = 0;
+static uint8_t parseInt32Field(const char** cursor, int32_t* value) {
+  char* end = NULL;
+  long parsed = strtol(*cursor, &end, 10);
+  if (end == *cursor) return 0;
+  *value = (int32_t)parsed;
+  *cursor = end;
+  return 1;
+}
 
-  if (strncmp(cmd, "CMD:STOP", 8) == 0) {
+static uint8_t parseUint32Field(const char** cursor, uint32_t* value) {
+  char* end = NULL;
+  unsigned long parsed = strtoul(*cursor, &end, 10);
+  if (end == *cursor) return 0;
+  *value = (uint32_t)parsed;
+  *cursor = end;
+  return 1;
+}
+
+uint8_t parseArmPayload(const char* payload, int32_t* steps, uint32_t* speed_sps) {
+  const char* p = payload;
+  if (!parseInt32Field(&p, steps)) return 0;
+  if (*p != ',') return 0;
+  p++;
+  if (!parseUint32Field(&p, speed_sps)) return 0;
+  if (*p != '\0') return 0;
+  if (*steps > STEPPER_MAX_STEPS || *steps < -STEPPER_MAX_STEPS) return 0;
+  if (*speed_sps < STEPPER_MIN_SPS || *speed_sps > STEPPER_MAX_SPS) return 0;
+  return 1;
+}
+
+static uint8_t parseDrivePayload(const char* payload, int16_t* speed, int16_t* steer) {
+  const char* p = payload;
+  int32_t parsedSpeed = 0;
+  int32_t parsedSteer = 0;
+  if (!parseInt32Field(&p, &parsedSpeed)) return 0;
+  if (*p != ',') return 0;
+  p++;
+  if (!parseInt32Field(&p, &parsedSteer)) return 0;
+  if (*p != '\0') return 0;
+  if (parsedSpeed < -32768L || parsedSpeed > 32767L) return 0;
+  if (parsedSteer < -32768L || parsedSteer > 32767L) return 0;
+  *speed = (int16_t)parsedSpeed;
+  *steer = (int16_t)parsedSteer;
+  return 1;
+}
+
+void parseCommand(char* cmd) {
+  uint32_t now = HAL_GetTick();
+
+  if (strcmp(cmd, "CMD:STOP") == 0) {
+    lastRPiCmd = now;
+    emergStop  = 0;
     cmdSpeed  = 0;
     cmdSteer  = 0;
     returning = 0;
@@ -758,80 +814,122 @@ void parseCommand(char* cmd) {
     sendUSB("ACK:STOP\r\n");
   }
   else if (strncmp(cmd, "CMD:DRIVE:", 10) == 0) {
+    int16_t spd = 0;
+    int16_t str = 0;
+    if (!parseDrivePayload(cmd + 10, &spd, &str)) {
+      sendUSB("ERR:BAD_DRIVE_CMD\r\n");
+      return;
+    }
+    lastRPiCmd = now;
+    emergStop  = 0;
     if (!returning) {
-      char*   p   = cmd + 10;
-      int16_t spd = (int16_t)atoi(p);
-      char*   comma = strchr(p, ',');
-      int16_t str   = comma ? (int16_t)atoi(comma + 1) : 0;
       cmdSpeed = spd;
       cmdSteer = str;
     }
     sendUSB("ACK:DRIVE\r\n");
   }
   else if (strncmp(cmd, "CMD:ARM:", 8) == 0) {
-    char*    p     = cmd + 8;
-    int32_t  steps = atol(p);
-    char*    comma = strchr(p, ',');
-    uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
+    int32_t  steps = 0;
+    uint32_t spd   = 0;
+    if (!parseArmPayload(cmd + 8, &steps, &spd)) {
+      sendUSB("ERR:BAD_ARM_CMD\r\n");
+      return;
+    }
+    lastRPiCmd = now;
+    emergStop  = 0;
     sendUSB("ACK:ARM\r\n");
     if (steps != 0) {
       stepperMove(1, steps, spd);
     }
   }
   else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
-    char*    p     = cmd + 9;
-    int32_t  steps = atol(p);
-    char*    comma = strchr(p, ',');
-    uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
+    int32_t  steps = 0;
+    uint32_t spd   = 0;
+    if (!parseArmPayload(cmd + 9, &steps, &spd)) {
+      sendUSB("ERR:BAD_ARM2_CMD\r\n");
+      return;
+    }
+    lastRPiCmd = now;
+    emergStop  = 0;
     sendUSB("ACK:ARM2\r\n");
     if (steps != 0) {
       stepperMove(2, steps, spd);
     }
   }
-  else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
+  else if (strcmp(cmd, "CMD:RETURN") == 0) {
+    lastRPiCmd = now;
+    emergStop  = 0;
     returning = 1;
     sendUSB("ACK:RETURN\r\n");
   }
-  else if (strncmp(cmd, "CMD:PING", 8) == 0) {
+  else if (strcmp(cmd, "CMD:PING") == 0) {
+    lastRPiCmd = now;
+    emergStop  = 0;
     sendUSB("ACK:PING\r\n");
   }
-  else if (strncmp(cmd, "CMD:RESET_HOME", 14) == 0) {
+  else if (strcmp(cmd, "CMD:RESET_HOME") == 0) {
+    lastRPiCmd = now;
+    emergStop  = 0;
     homeX   = posX;
     homeY   = posY;
     homeHdg = heading;
     sendUSB("ACK:RESET_HOME\r\n");
   }
-  else if (strncmp(cmd, "CMD:RESET_ODOM", 14) == 0) {
+  else if (strcmp(cmd, "CMD:RESET_ODOM") == 0) {
+    lastRPiCmd = now;
+    emergStop  = 0;
     posX = 0; posY = 0;
     heading = 0; distCm = 0;
     homeX = 0; homeY = 0; homeHdg = 0;
     sendUSB("ACK:RESET_ODOM\r\n");
   }
+  else {
+    sendUSB("ERR:BAD_CMD\r\n");
+  }
 }
 
 // ── Process incoming USB bytes ───────────────────────────────
 void readRPi(void) {
-  for (uint32_t i = 0; i < usbRxLen; i++) {
-    char c = (char)usbRxBuf[i];
+  if (usbRxOverflow) {
+    usbRxOverflow = 0;
+    rpiIdx = 0;
+    rpiDiscardUntilEol = 1;
+    sendUSB("ALERT:USB_RX_OVERFLOW\r\n");
+  }
+
+  while (usbRxTail != usbRxHead) {
+    char c = (char)usbRxRing[usbRxTail];
+    usbRxTail = (uint16_t)((usbRxTail + 1U) & USB_RX_RING_MASK);
+
     if (c == '\n' || c == '\r') {
+      if (rpiDiscardUntilEol) {
+        rpiDiscardUntilEol = 0;
+        rpiIdx = 0;
+        continue;
+      }
       if (rpiIdx > 0) {
         rpiBuffer[rpiIdx] = '\0';
         parseCommand(rpiBuffer);
         rpiIdx = 0;
       }
     } else {
-      if (rpiIdx < 63) rpiBuffer[rpiIdx++] = c;
+      if (rpiDiscardUntilEol) {
+        continue;
+      }
+      if (rpiIdx < 63) {
+        rpiBuffer[rpiIdx++] = c;
+      } else {
+        rpiIdx = 0;
+        rpiDiscardUntilEol = 1;
+        sendUSB("ERR:CMD_TOO_LONG\r\n");
+      }
     }
   }
-  usbRxLen = 0;
 }
 
 // ── USB receive callback (called by USB CDC driver) ──────────
 // Add this to usbd_cdc_if.c in the CDC_Receive_FS function:
-// extern uint8_t usbRxBuf[64];
-// extern uint32_t usbRxLen;
-// memcpy(usbRxBuf, Buf, *Len);
-// usbRxLen = *Len;
+// USB bytes are pushed into usbRxRing by CDC_Receive_FS.
 
 // ── Telemetry to RPi ────────────────────────────────────────
 void sendTelemetry(void) {

@@ -86,6 +86,9 @@ def main() -> int:
         assert b"Mode-Adaptive Guard" in home, "mode-aware sensor guard missing"
         assert b"Dance Envelope Map" in home, "advanced dance envelope map missing"
         assert b'id="talkBank"' in home, "welcome talk bank metric missing"
+        assert b"Validation Center" in home, "validation center section missing"
+        assert b"/api/validation/catalog" in home, "validation catalog route missing from UI"
+        assert b"/api/validation/run" in home, "validation run route missing from UI"
         assert b"Mission Log" in home, "mission log summary missing"
 
         js_status, js_body = request("/static/pluto_3d.js")
@@ -153,6 +156,15 @@ def main() -> int:
         assert "speaker_available" in audio
         assert "requested_microphone" in audio
         assert "requested_speaker" in audio
+
+        validation_code, raw_validation = request("/api/validation/catalog")
+        assert validation_code == 200, validation_code
+        validation = json.loads(raw_validation.decode("utf-8"))
+        assert validation["name"] == "Validation Center"
+        validation_tests = {item["id"]: item for item in validation["tests"]}
+        assert "mode-transition" in validation_tests
+        assert "stm32-communication" in validation_tests
+        assert validation_tests["welcome-approach-dry-run"]["dry_run_only"] is True
 
         select_mic_code, select_mic_raw = request("/api/audio/select-microphone", "POST", {"device": ""})
         assert select_mic_code == 200, select_mic_code

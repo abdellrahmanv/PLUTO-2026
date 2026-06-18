@@ -4,7 +4,7 @@ import time
 ser = serial.Serial('COM8', 115200, timeout=1)
 time.sleep(0.5)
 print("Sending slow move (200 steps @ 20 sps)...")
-ser.write(b'CMD:ARM:200,20\n')
+ser.write(b'CMD:ARM:200,2000\n')
 
 start = time.time()
 while time.time() - start < 12:

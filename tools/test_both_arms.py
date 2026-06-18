@@ -13,7 +13,7 @@ ser.reset_input_buffer()
 
 # 1. Test ARM1
 print("\n[1] Testing ARM1 (PB8/PB9)...")
-ser.write(b"CMD:ARM:400,100\n")
+ser.write(b"CMD:ARM:400,2000\n")
 start = time.monotonic()
 while time.monotonic() - start < 6:
     line = ser.readline().decode(errors="replace").strip()
@@ -24,7 +24,7 @@ while time.monotonic() - start < 6:
 
 # 2. Test ARM2
 print("\n[2] Testing ARM2 (PB12/PB13)...")
-ser.write(b"CMD:ARM2:400,100\n")
+ser.write(b"CMD:ARM2:400,2000\n")
 start = time.monotonic()
 while time.monotonic() - start < 6:
     line = ser.readline().decode(errors="replace").strip()

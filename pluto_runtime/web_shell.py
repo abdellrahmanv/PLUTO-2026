@@ -31,6 +31,7 @@ from .camera import CameraService, CameraStatus, status_to_dict
 from .dance import DanceDryRunPlanner, DanceStatus
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
+from .validation_center import ValidationCenter
 from .wave_detection import SimpleWaveDetector
 from .welcome_approach import ApproachStatus, WelcomeApproachPlanner
 from .welcome_talk import TalkResult, WelcomeTalkEngine
@@ -105,7 +106,7 @@ class ManualRuntime:
     base_speed_setting: int = 150
     base_steer_setting: int = 80
     arm_step_setting: int = 5000
-    arm_speed_setting: int = 800
+    arm_speed_setting: int = 2000
     max_arm_steps: int = 10000
     max_arm_speed: int = 3000
     command_period_ms: int = 150
@@ -181,6 +182,7 @@ class PlutoWebContext:
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
         self.talk_last_notice = "Enter WELCOME, then ask a short question."
         self.audio_runtime = AudioRuntime(preferred_microphone=microphone_device, preferred_speaker=speaker_device)
+        self.validation_center = ValidationCenter()
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
         self.hardware = {
@@ -665,7 +667,7 @@ class PlutoWebContext:
         step_limit = max(1, int(self.manual.max_arm_steps))
         speed_limit = max(1, int(self.manual.max_arm_speed))
         clamped_steps = self.clamp(int(steps), step_limit)
-        clamped_speed = max(1, min(speed_limit, int(speed)))
+        clamped_speed = max(2000, min(speed_limit, int(speed)))
 
         started = time.monotonic()
         if arm_num == 2:
@@ -885,6 +887,21 @@ class PlutoWebContext:
             "command": " ".join(command),
             "stop": stop,
         }
+
+    def hardware_status_for_validation(self) -> dict[str, Any]:
+        with self.lock:
+            return {key: asdict(value) for key, value in self.hardware.items()}
+
+    def validation_catalog(self) -> dict[str, Any]:
+        return self.validation_center.catalog(self.hardware_status_for_validation())
+
+    def run_validation_test(self, test_id: str) -> dict[str, Any]:
+        result = self.validation_center.run(test_id, self.hardware_status_for_validation())
+        level = "pass" if result.status == "PASS" else ("warn" if result.status == "WARNING" else "error")
+        self.log(level, f"Validation {result.name}: {result.status}")
+        payload = result.to_dict()
+        payload["catalog"] = self.validation_catalog()
+        return payload
 
     def snapshot(self) -> PlutoStatus:
         with self.lock:
@@ -1927,6 +1944,69 @@ def html_page() -> str:
     .event.warn {{ background: var(--warn-bg); }}
     .event.error, .event.bad {{ background: var(--bad-bg); }}
     .event.pass, .event.info {{ background: var(--info-bg); }}
+    .validation-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }}
+    .validation-group {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px;
+    }}
+    .validation-group h3 {{
+      margin: 0 0 8px;
+      color: var(--heading);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .validation-test {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 10px;
+      border-top: 1px solid var(--line);
+      padding: 10px 0;
+    }}
+    .validation-test:first-of-type {{ border-top: 0; }}
+    .validation-name {{
+      font-weight: 850;
+      overflow-wrap: anywhere;
+    }}
+    .validation-meta, .validation-command, .validation-output {{
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }}
+    .validation-output {{
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 8px;
+    }}
+    .validation-status {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 74px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-weight: 900;
+      font-size: 12px;
+    }}
+    .validation-status.pass {{ color: var(--good); border-color: var(--good); background: var(--good-bg); }}
+    .validation-status.fail {{ color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }}
+    .validation-status.warning, .validation-status.running {{ color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }}
     .hardware-rack {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2268,7 +2348,7 @@ def html_page() -> str:
       .visual-readouts {{ grid-template-columns: 1fr; }}
       .ops-brief {{ grid-template-columns: 1fr; }}
       .event {{ grid-template-columns: 1fr; }}
-      .event-summary, .hardware-rack, .mode-flow {{ grid-template-columns: 1fr; }}
+      .event-summary, .hardware-rack, .mode-flow, .validation-grid {{ grid-template-columns: 1fr; }}
       .talk-row {{ grid-template-columns: 1fr; }}
       .sensor-summary {{ grid-template-columns: 1fr; }}
       .readout-grid, .readout-grid.three, .readout-grid.four {{ grid-template-columns: 1fr; }}
@@ -2595,7 +2675,7 @@ def html_page() -> str:
               <input id="manualArmSteps" type="number" min="1" max="10000" step="10" value="5000">
             </label>
             <label>Arm speed
-              <input id="manualArmSpeed" type="number" min="1" max="3000" step="10" value="800">
+              <input id="manualArmSpeed" type="number" min="2000" max="3000" step="10" value="2000">
             </label>
           </div>
           <div class="manual-arm-grid">
@@ -2678,6 +2758,10 @@ def html_page() -> str:
         <div class="metric"><span class="label">Pose</span><span class="value" id="cameraPose">not checked</span></div>
       </section>
       <section class="span-12">
+        <h2>Validation Center</h2>
+        <div class="validation-grid" id="validationCenter"></div>
+      </section>
+      <section class="span-12">
         <h2>Mission Log</h2>
         <div class="event-summary">
           <div class="event-tile"><span>Latest</span><strong id="eventLatest">none</strong></div>
@@ -2697,6 +2781,8 @@ def html_page() -> str:
   <script>
     const THEME_KEY = 'pluto-theme';
     const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    let validationCatalog = [];
+    let validationLastResults = {{}};
     function getStoredTheme() {{
       try {{
         return localStorage.getItem(THEME_KEY) || 'auto';
@@ -2853,6 +2939,91 @@ def html_page() -> str:
           <small>${{esc(detail)}}</small>
         </div>`;
       }}).join('');
+    }}
+    function validationMissingHardware(test, hardware) {{
+      return (test.required_hardware || []).filter(key => !(hardware[key] && hardware[key].connected));
+    }}
+    function validationStatusClass(status) {{
+      const clean = cleanClass(status || 'warning');
+      if (clean === 'pass') return 'pass';
+      if (clean === 'fail') return 'fail';
+      if (clean === 'running') return 'running';
+      return 'warning';
+    }}
+    function renderValidationCatalog(catalog, hardware) {{
+      const root = document.getElementById('validationCenter');
+      if (!root) return;
+      if (!catalog.length) {{
+        root.innerHTML = '<div class="validation-group"><h3>Validation Center</h3><div class="validation-meta">loading catalog</div></div>';
+        return;
+      }}
+      const order = ['Communication Tests', 'Motion Tests', 'Perception Tests', 'Audio Tests', 'Safety Tests', 'System Tests'];
+      const groups = new Map();
+      catalog.forEach(test => {{
+        if (!groups.has(test.category)) groups.set(test.category, []);
+        groups.get(test.category).push(test);
+      }});
+      root.innerHTML = order.filter(category => groups.has(category)).map(category => {{
+        const tests = groups.get(category);
+        return `<div class="validation-group">
+          <h3>${{esc(category)}}</h3>
+          ${{tests.map(test => {{
+            const missing = validationMissingHardware(test, hardware || {{}});
+            const result = validationLastResults[test.id] || test.last_result || null;
+            const status = result ? result.status : (missing.length ? 'WARNING' : 'READY');
+            const statusClass = validationStatusClass(status);
+            const disabled = missing.length > 0 || status === 'RUNNING';
+            const hardwareText = (test.required_hardware || []).length ? test.required_hardware.join(', ') : 'none';
+            const block = missing.length ? ` / missing ${{missing.join(', ')}}` : '';
+            const measurements = result && result.measurements ? ` / ${{Object.entries(result.measurements).map(([k, v]) => `${{k}}=${{v}}`).join(' / ')}}` : '';
+            const output = result && result.output ? result.output : (missing.length ? `Required hardware not detected: ${{missing.join(', ')}}` : 'no run yet');
+            return `<div class="validation-test" id="validation-${{esc(test.id)}}">
+              <div class="validation-name">${{esc(test.name)}}</div>
+              <span class="validation-status ${{statusClass}}">${{esc(status)}}</span>
+              <div class="validation-meta">safety=${{esc(test.safety_level)}} / hardware=${{esc(hardwareText)}} / timeout=${{Number(test.timeout_s || 0).toFixed(0)}}s${{esc(block)}}${{esc(measurements)}}</div>
+              <div class="validation-command">${{esc(test.terminal_command)}}</div>
+              <button data-validation-id="${{esc(test.id)}}" ${{disabled ? 'disabled' : ''}}>${{esc(test.button_label)}}</button>
+              <div class="validation-output">${{esc(output)}}</div>
+            </div>`;
+          }}).join('')}}
+        </div>`;
+      }}).join('');
+    }}
+    async function loadValidationCatalog() {{
+      const payload = await api('/api/validation/catalog');
+      validationCatalog = payload.tests || [];
+      validationCatalog.forEach(test => {{
+        if (test.last_result) validationLastResults[test.id] = test.last_result;
+      }});
+      return payload;
+    }}
+    async function runValidationTest(testId) {{
+      const test = validationCatalog.find(item => item.id === testId);
+      if (!test) return;
+      validationLastResults[testId] = {{
+        status: 'RUNNING',
+        output: `running ${{test.terminal_command}}`,
+        measurements: {{}},
+      }};
+      renderValidationCatalog(validationCatalog, window.lastPlutoHardware || {{}});
+      try {{
+        const result = await api('/api/validation/run', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{test_id: testId}})
+        }});
+        validationLastResults[testId] = result;
+        if (result.catalog && result.catalog.tests) {{
+          validationCatalog = result.catalog.tests;
+        }}
+      }} catch (err) {{
+        validationLastResults[testId] = {{
+          status: 'FAIL',
+          output: String(err),
+          measurements: {{}},
+        }};
+      }}
+      renderValidationCatalog(validationCatalog, window.lastPlutoHardware || {{}});
     }}
     function renderEventSummary(events) {{
       const warningCount = events.filter(item => cleanClass(item.level) === 'warn').length;
@@ -3284,6 +3455,7 @@ def html_page() -> str:
     function render(data) {{
       const stm = data.stm32_runtime || {{}};
       const hardwareRows = Object.values(data.hardware || {{}});
+      window.lastPlutoHardware = data.hardware || {{}};
       const connectedHardware = hardwareRows.filter(item => item.connected).length;
       const requiredMissing = hardwareRows.filter(item => item.required && !item.connected);
       const returnLocked = data.mode_manager && data.mode_manager.return_lock;
@@ -3569,7 +3741,7 @@ def html_page() -> str:
       armSteps.max = manual.max_arm_steps || 10000;
       armSpeed.max = manual.max_arm_speed || 3000;
       if (document.activeElement !== armSteps) armSteps.value = manual.arm_step_setting || 5000;
-      if (document.activeElement !== armSpeed) armSpeed.value = manual.arm_speed_setting || 800;
+      if (document.activeElement !== armSpeed) armSpeed.value = manual.arm_speed_setting || 2000;
       const lastArm = manual.last_arm_command || null;
       document.getElementById('manualArmLast').textContent = lastArm && lastArm.arm
         ? `arm${{lastArm.arm}} ${{lastArm.steps}} steps @ ${{lastArm.speed}}`
@@ -3651,6 +3823,7 @@ def html_page() -> str:
       document.getElementById('cameraInference').textContent = `${{(camera.inference_ms || 0).toFixed(1)}} ms`;
       document.getElementById('cameraPose').textContent =
         `${{camera.pose_status || 'unknown'}} / ${{(camera.pose_inference_ms || 0).toFixed(1)}} ms`;
+      renderValidationCatalog(validationCatalog, data.hardware || {{}});
     }}
     async function refresh() {{
       try {{ render(await api('/api/status')); }}
@@ -3739,7 +3912,7 @@ def html_page() -> str:
       const maxSteps = Number(document.getElementById('manualArmSteps').max || 10000);
       const maxSpeed = Number(document.getElementById('manualArmSpeed').max || 3000);
       const steps = numericInput('manualArmSteps', 5000, 1, maxSteps) * direction;
-      const speed = numericInput('manualArmSpeed', 800, 1, maxSpeed);
+      const speed = numericInput('manualArmSpeed', 2000, 2000, maxSpeed);
       await api('/api/manual/arm', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
@@ -3864,6 +4037,14 @@ def html_page() -> str:
         document.getElementById('talkAsk').click();
       }}
     }});
+    document.getElementById('validationCenter').addEventListener('click', async (event) => {{
+      const button = event.target.closest('button[data-validation-id]');
+      if (!button || button.disabled) return;
+      await runValidationTest(button.dataset.validationId);
+    }});
+    loadValidationCatalog()
+      .then(() => renderValidationCatalog(validationCatalog, window.lastPlutoHardware || {{}}))
+      .catch(console.error);
     refresh();
     setInterval(refresh, 1000);
   </script>
@@ -4327,6 +4508,9 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/audio/status":
             self.send_json(HTTPStatus.OK, self.context.audio_status())
             return
+        if path == "/api/validation/catalog":
+            self.send_json(HTTPStatus.OK, self.context.validation_catalog())
+            return
         if path == "/camera.jpg":
             frame = self.context.camera_service.get_jpeg()
             if frame is None:
@@ -4447,7 +4631,13 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 body = self.read_json()
                 self.send_json(HTTPStatus.OK, self.context.shutdown(body.get("confirm")))
                 return
+            if path == "/api/validation/run":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.run_validation_test(str(body.get("test_id", ""))))
+                return
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except KeyError as exc:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
         except Exception as exc:
             self.context.log("error", f"API failure on {path}: {exc}")
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})

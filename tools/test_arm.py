@@ -34,8 +34,8 @@ if not emerg_seen:
     print("  No emergency alert — PB0 seems OK")
 
 # 2. Send ARM command with just 10 steps at speed 50 (should take 0.2s)
-print("\n[2] Sending CMD:ARM:10,50 (10 steps only)...")
-ser.write(b"CMD:ARM:10,50\n")
+print("\n[2] Sending CMD:ARM:100,2000 (100 steps only)...")
+ser.write(b"CMD:ARM:100,2000\n")
 start = time.monotonic()
 
 ack_arm = False
@@ -60,8 +60,8 @@ while time.monotonic() - start < 5:
 if ack_done:
     elapsed_total = time.monotonic() - start
     print(f"\n  ARM_DONE received in {elapsed_total:.2f}s")
-    expected = 10.0 / 50.0  # 0.2 seconds for 10 steps at 50 sps
-    print(f"  Expected ~{expected:.2f}s for 10 steps at 50 sps")
+    expected = 100.0 / 2000.0
+    print(f"  Expected ~{expected:.2f}s for 100 steps at 2000 sps")
     if elapsed_total > 1.0:
         print("  ⚠️  Took WAY too long — emergency stop may be interrupting!")
 elif ack_arm:
@@ -70,8 +70,8 @@ else:
     print("\n  ❌ No ACK at all!")
 
 # 3. Try sending a very fast burst — 5 steps at 500 sps
-print("\n[3] Sending CMD:ARM:5,500 (5 fast steps)...")
-ser.write(b"CMD:ARM:5,500\n")
+print("\n[3] Sending CMD:ARM:200,2500 (valid smooth burst)...")
+ser.write(b"CMD:ARM:200,2500\n")
 start = time.monotonic()
 while time.monotonic() - start < 3:
     line = ser.readline().decode(errors="replace").strip()
@@ -82,8 +82,8 @@ while time.monotonic() - start < 3:
             break
 
 # 4. Try negative direction
-print("\n[4] Sending CMD:ARM:-10,50 (reverse direction)...")
-ser.write(b"CMD:ARM:-10,50\n")
+print("\n[4] Sending CMD:ARM:-100,2000 (reverse direction)...")
+ser.write(b"CMD:ARM:-100,2000\n")
 start = time.monotonic()
 while time.monotonic() - start < 5:
     line = ser.readline().decode(errors="replace").strip()

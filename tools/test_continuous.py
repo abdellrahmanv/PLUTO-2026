@@ -24,7 +24,7 @@ print("=" * 60)
 
 direction = 1
 steps = 800
-speed = 200  # 200 steps/sec = 4 seconds per move
+speed = 2000
 
 try:
     while True:

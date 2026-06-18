@@ -5,8 +5,8 @@ time.sleep(0.5)
 ser.reset_input_buffer()
 
 print("=== FINAL MOTOR TEST ===")
-print("Sending CMD:ARM:200,20 (200 steps, 20 sps, ~10 seconds)")
-ser.write(b"CMD:ARM:200,20\n")
+print("Sending CMD:ARM:200,2000 (200 steps, 2000 sps)")
+ser.write(b"CMD:ARM:200,2000\n")
 
 start = time.time()
 while time.time() - start < 15:

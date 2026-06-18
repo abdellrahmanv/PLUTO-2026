@@ -37,7 +37,7 @@ class PanelState:
     last_alert: str = "none"
     last_command: str = "none"
     arm_steps: int = 800
-    arm_speed: int = 50
+    arm_speed: int = 2000
     raw_mode: bool = False
 
 
@@ -102,10 +102,10 @@ Commands:
   - / d             jog Arm 1 negative by current steps
   move <steps>      jog Arm 1 by exact signed steps, example: move -250
   steps <n>         set jog step amount, example: steps 150
-  speed <n>         set Arm 1 speed, example: speed 250
+  speed <n>         set Arm 1 speed, example: speed 2000
   stop / s          send CMD:STOP
   ping / p          send CMD:PING
-  raw <command>     send exact command, example: raw CMD:ARM:100,200
+  raw <command>     send exact command, example: raw CMD:ARM:100,2000
   rawmode           toggle printing every raw STM32 line
   help / h          show this menu
   quit / q          exit
@@ -149,7 +149,7 @@ def handle_command(text: str, ser: serial.Serial, state: PanelState) -> bool:
         print(f"\nArm 1 jog steps set to {state.arm_steps}")
         return True
     if len(parts) == 2 and parts[0].lower() == "speed":
-        state.arm_speed = max(1, min(3000, abs(int(parts[1]))))
+        state.arm_speed = max(2000, min(3000, abs(int(parts[1]))))
         print(f"\nArm 1 speed set to {state.arm_speed}")
         return True
     if len(parts) == 2 and parts[0].lower() == "move":
@@ -198,11 +198,11 @@ def main() -> int:
     parser.add_argument("--port", default=None, help="Serial port, e.g. COM8 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--steps", type=int, default=800)
-    parser.add_argument("--speed", type=int, default=50)
+    parser.add_argument("--speed", type=int, default=2000)
     args = parser.parse_args()
 
     port = find_port(args.port)
-    state = PanelState(arm_steps=max(1, abs(args.steps)), arm_speed=max(1, abs(args.speed)))
+    state = PanelState(arm_steps=max(1, abs(args.steps)), arm_speed=max(2000, min(3000, abs(args.speed))))
     commands: queue.Queue[str] = queue.Queue()
 
     print("PLUTO STM32 terminal panel")

@@ -7,7 +7,7 @@ ser.reset_input_buffer()
 
 # 5000 steps at 800 sps will take 6.25 seconds
 print("Sending long move (5000 steps @ 800 sps)...")
-ser.write(b'CMD:ARM:5000,800\n')
+ser.write(b'CMD:ARM:5000,2000\n')
 
 start = time.time()
 while time.time() - start < 10:

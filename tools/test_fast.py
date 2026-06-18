@@ -6,7 +6,7 @@ time.sleep(1.5)
 ser.reset_input_buffer()
 
 print("Sending fast move (1000 steps @ 500 sps)...")
-ser.write(b'CMD:ARM:1000,500\n')
+ser.write(b'CMD:ARM:1000,2500\n')
 
 start = time.time()
 while time.time() - start < 5:

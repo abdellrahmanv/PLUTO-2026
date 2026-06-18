@@ -15,7 +15,7 @@ print("Press Ctrl+C to stop at any time.")
 print("=" * 60)
 
 # We will test speeds from 10 to 300 steps/second
-speeds = [10, 20, 30, 50, 80, 100, 150, 200, 300]
+speeds = [2000, 2250, 2500, 2750, 3000]
 steps = 200  # 1 revolution at 1/2 step
 
 try:
