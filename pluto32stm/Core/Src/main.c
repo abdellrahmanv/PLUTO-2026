@@ -94,7 +94,8 @@ typedef struct {
 
 // Stepper constants
 #define STEPPER_MAX_SPS     3000
-#define STEPPER_MIN_SPS     100
+#define STEPPER_MIN_SPS     2000
+#define STEPPER_MAX_STEPS   12000L
 
 // TB6600 common-anode configuration
 #define STEPPER_PULSE_US       50U
@@ -180,6 +181,7 @@ typedef struct {
 volatile uint8_t  usbRing[USB_RING_SIZE];
 volatile uint16_t usbRingHead = 0;   // written by ISR only
 volatile uint16_t usbRingTail = 0;   // read/written by main loop only
+volatile uint8_t  usbRxOverflow = 0;
 
 /* ============================================================================
  * HOVERBOARD UART RING BUFFER
@@ -340,6 +342,7 @@ void     readHoverboard(void);
 // RPi
 void     readRPi(void);
 void     parseCommand(char* cmd);
+uint8_t  parseArmPayload(const char* payload, int32_t* steps, uint32_t* speed_sps);
 void     sendTelemetry(void);
 
 // Safety / navigation
@@ -750,6 +753,11 @@ void readHoverboard(void) {
  * RPi COMMAND PARSING
  * ============================================================================ */
 void readRPi(void) {
+    if (usbRxOverflow) {
+        usbRxOverflow = 0;
+        sendUSB("WARN:USB_RX_OVERFLOW\r\n");
+    }
+
     while (usbRingTail != usbRingHead) {
         char c = (char)(usbRing[usbRingTail & USB_RING_MASK]);
         usbRingTail++;
@@ -764,6 +772,19 @@ void readRPi(void) {
             if (rpiIdx < 63) rpiBuffer[rpiIdx++] = c;
         }
     }
+}
+
+uint8_t parseArmPayload(const char* payload, int32_t* steps, uint32_t* speed_sps) {
+    char* comma = strchr(payload, ',');
+    if (comma == NULL) return 0;
+
+    *steps = atol(payload);
+    *speed_sps = (uint32_t)atol(comma + 1);
+
+    if (*steps > STEPPER_MAX_STEPS || *steps < -STEPPER_MAX_STEPS) return 0;
+    if (*speed_sps < STEPPER_MIN_SPS || *speed_sps > STEPPER_MAX_SPS) return 0;
+
+    return 1;
 }
 
 void parseCommand(char* cmd) {
@@ -787,24 +808,24 @@ void parseCommand(char* cmd) {
         sendUSB("ACK:DRIVE\r\n");
     }
     else if (strncmp(cmd, "CMD:ARM:", 8) == 0) {
-        char*    p     = cmd + 8;
-        int32_t  steps = atol(p);
-        char*    comma = strchr(p, ',');
-        uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-        char*    comma2= comma ? strchr(comma + 1, ',') : NULL;
-        uint32_t acc   = comma2 ? (uint32_t)atol(comma2 + 1) : 0;
+        int32_t  steps = 0;
+        uint32_t spd   = 0;
+        if (!parseArmPayload(cmd + 8, &steps, &spd)) {
+            sendUSB("ERR:ARM_BOUNDS\r\n");
+            return;
+        }
         sendUSB("ACK:ARM\r\n");
-        if (steps != 0) stepperMove(0, steps, spd, acc);
+        if (steps != 0) stepperMove(0, steps, spd, 0);
     }
     else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
-        char*    p     = cmd + 9;
-        int32_t  steps = atol(p);
-        char*    comma = strchr(p, ',');
-        uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-        char*    comma2= comma ? strchr(comma + 1, ',') : NULL;
-        uint32_t acc   = comma2 ? (uint32_t)atol(comma2 + 1) : 0;
+        int32_t  steps = 0;
+        uint32_t spd   = 0;
+        if (!parseArmPayload(cmd + 9, &steps, &spd)) {
+            sendUSB("ERR:ARM2_BOUNDS\r\n");
+            return;
+        }
         sendUSB("ACK:ARM2\r\n");
-        if (steps != 0) stepperMove(1, steps, spd, acc);
+        if (steps != 0) stepperMove(1, steps, spd, 0);
     }
     else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
         returning = 1;

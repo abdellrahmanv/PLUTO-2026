@@ -144,7 +144,7 @@ def test_arm_sequence() -> None:
     """Full ARM sequence: ACK:ARM then later ACK:ARM_DONE."""
     link = Stm32SerialLink("COM_FAKE", baud=115200)
     link._status.arm_count = 1
-    link._status.last_arm_command = "CMD:ARM:200,300"
+    link._status.last_arm_command = "CMD:ARM:200,2000"
     link._status.arm_done = False
     link._status.arm_done_at = None
 
@@ -239,18 +239,18 @@ def test_command_tracking_with_mock() -> None:
     assert link._status.reset_home_count == 1
 
     # 3. Test ARM
-    res = link.send_arm(steps=150, speed=100, wait_ack=False)
+    res = link.send_arm(steps=150, speed=2000, wait_ack=False)
     assert res["ok"] is True
-    assert fake_ser.written[-1] == b"CMD:ARM:150,100\n"
+    assert fake_ser.written[-1] == b"CMD:ARM:150,2000\n"
     assert link._status.arm_count == 1
-    assert link._status.last_arm_command == "CMD:ARM:150,100"
+    assert link._status.last_arm_command == "CMD:ARM:150,2000"
 
     # 4. Test ARM2
-    res = link.send_arm2(steps=-75, speed=250, wait_ack=False)
+    res = link.send_arm2(steps=-75, speed=2500, wait_ack=False)
     assert res["ok"] is True
-    assert fake_ser.written[-1] == b"CMD:ARM2:-75,250\n"
+    assert fake_ser.written[-1] == b"CMD:ARM2:-75,2500\n"
     assert link._status.arm2_count == 1
-    assert link._status.last_arm2_command == "CMD:ARM2:-75,250"
+    assert link._status.last_arm2_command == "CMD:ARM2:-75,2500"
 
     print("  command_tracking_with_mock PASS")
 

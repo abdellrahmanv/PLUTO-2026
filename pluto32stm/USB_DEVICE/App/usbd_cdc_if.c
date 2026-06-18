@@ -265,8 +265,14 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 #define USB_RING_MASK  (USB_RING_SIZE - 1)
       extern volatile uint8_t  usbRing[USB_RING_SIZE];
       extern volatile uint16_t usbRingHead;
+      extern volatile uint16_t usbRingTail;
+      extern volatile uint8_t  usbRxOverflow;
 
       for (uint32_t i = 0; i < *Len; i++) {
+          if ((uint16_t)(usbRingHead - usbRingTail) >= (USB_RING_SIZE - 1U)) {
+              usbRxOverflow = 1;
+              break;
+          }
           usbRing[usbRingHead & USB_RING_MASK] = Buf[i];
           usbRingHead++;
       }

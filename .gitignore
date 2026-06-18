@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.pluto/
 
 # STM32CubeIDE generated build output
 pluto32stm/Debug/

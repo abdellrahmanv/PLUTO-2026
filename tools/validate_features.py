@@ -60,6 +60,7 @@ def checks(args: argparse.Namespace) -> list[FeatureCheck]:
     items = [
         FeatureCheck("STATE-CORE-001", "Mode manager transitions", [py, "tools/mode_manager_smoke.py"]),
         FeatureCheck("WEB-001", "Operator website shell", [py, "tools/web_shell_smoke.py"], timeout_s=90),
+        FeatureCheck("WEB-002", "Validation Center catalog and runner", [py, "tools/validation_center_smoke.py"], timeout_s=120),
         FeatureCheck("STATE-5", "ERROR state behavior", [py, "tools/error_state_smoke.py"], timeout_s=90),
         FeatureCheck("STATE-2", "MANUAL gates and raw route blocking", [py, "tools/manual_state_smoke.py"], timeout_s=90),
         FeatureCheck("STATE-3.33", "WELCOME_TALK keyword bank", [py, "tools/welcome_talk_smoke.py"], timeout_s=90),
