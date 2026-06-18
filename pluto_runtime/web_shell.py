@@ -297,7 +297,13 @@ class PlutoWebContext:
                 connected=audio_status.speaker_available,
                 port=audio_status.selected_speaker,
                 status="connected" if audio_status.speaker_available else "unavailable",
-                detail=audio_status.tts_detail if audio_status.speaker_available else "no playback device selected",
+                detail=audio_status.tts_detail
+                if audio_status.speaker_available
+                else (
+                    "playback device detected but no confirmed speaker selected"
+                    if audio_status.playback_devices
+                    else "no playback device selected"
+                ),
                 last_seen=time.time() if audio_status.speaker_available else None,
             )
             self.bootstrap_report = {
@@ -623,13 +629,7 @@ class PlutoWebContext:
 
         clamped_speed = self.clamp(speed, self.manual.max_speed)
         clamped_steer = self.clamp(steer, self.manual.max_steer)
-        obstacle_reason = self.forward_obstacle_reason(clamped_speed)
-        if obstacle_reason:
-            clamped_speed = 0
-            self.manual.blocked_reason = obstacle_reason
-            self.log("warn", f"Manual forward intent blocked: {obstacle_reason}")
-        else:
-            self.manual.blocked_reason = None
+        self.manual.blocked_reason = None
 
         started = time.monotonic()
         serial_result = self.stm32_link.send_drive(clamped_speed, clamped_steer)
@@ -723,7 +723,13 @@ class PlutoWebContext:
                 connected=status.speaker_available,
                 port=status.selected_speaker,
                 status="connected" if status.speaker_available else "unavailable",
-                detail=status.tts_detail if status.speaker_available else "no playback device selected",
+                detail=status.tts_detail
+                if status.speaker_available
+                else (
+                    "playback device detected but no confirmed speaker selected"
+                    if status.playback_devices
+                    else "no playback device selected"
+                ),
                 last_seen=time.time() if status.speaker_available else None,
             )
             self.log("info", "Audio hardware refreshed")
@@ -3067,8 +3073,10 @@ def html_page() -> str:
       const state = data.current_state || 'UNKNOWN';
       const stm = data.stm32_runtime || {{}};
       const rangeText = nearest ? `${{nearest.cm.toFixed(0)}} cm nearest` : `no valid echo, ${{liveCount}}/3 range live`;
-      let level = corridorLevel === 'bad' ? 'bad' : (corridorLevel === 'warn' ? 'warn' : 'good');
-      let headline = corridorLevel === 'bad' ? 'STOP: object inside guard' : (corridorLevel === 'warn' ? 'SLOW: corridor uncertain' : 'CLEAR: front arc open');
+      const rangeGateActive = state !== 'MANUAL';
+      const guardCorridorLevel = rangeGateActive ? corridorLevel : 'ok';
+      let level = guardCorridorLevel === 'bad' ? 'bad' : (guardCorridorLevel === 'warn' ? 'warn' : 'good');
+      let headline = guardCorridorLevel === 'bad' ? 'STOP: object inside guard' : (guardCorridorLevel === 'warn' ? 'SLOW: corridor uncertain' : 'CLEAR: front arc open');
       let guardDetail = `${{rangeText}} / confidence ${{sensorConfidence}}% / ${{modeLabel(state)}}`;
       let steps = [];
       if (!stm.running) {{
@@ -3086,7 +3094,9 @@ def html_page() -> str:
       }} else if (state === 'WELCOME') {{
         steps = ['Use camera target plus front range gate', corridorLevel === 'good' ? 'Approach may propose motion' : 'Approach must hold or slow', orientation.available ? 'Filtered IMU available for stable pose' : 'IMU still raw or calibrating'];
       }} else if (state === 'MANUAL') {{
-        steps = ['Operator command remains bounded', corridorLevel === 'bad' ? 'Forward motion should be blocked' : 'Use low speed until range is clear', 'Release controls returns to stop'];
+        headline = 'MANUAL: range gate informational';
+        guardDetail = `${{rangeText}} / ultrasonic blocking disabled in MANUAL / bounded operator control`;
+        steps = ['Operator command remains bounded', 'Ultrasonic readings are displayed only', 'Release controls returns to stop'];
       }} else if (state === 'DANCE') {{
         steps = ['Stay inside dance envelope', corridorLevel === 'good' ? 'Front arc clear for choreography' : 'Obstacle guard reduces confidence', 'Watch margin and predicted pose'];
       }} else {{
@@ -3104,8 +3114,8 @@ def html_page() -> str:
       );
       setBrief(
         'opsDecision',
-        corridorLevel === 'bad' ? 'STOP' : (corridorLevel === 'warn' ? 'SLOW' : 'CLEAR'),
-        rangeText,
+        state === 'MANUAL' ? 'INFO' : (corridorLevel === 'bad' ? 'STOP' : (corridorLevel === 'warn' ? 'SLOW' : 'CLEAR')),
+        state === 'MANUAL' ? `${{rangeText}} / manual ignores range gate` : rangeText,
         level
       );
       setBrief(
@@ -3116,9 +3126,9 @@ def html_page() -> str:
       );
       setBrief(
         'opsAction',
-        !stm.running ? 'connect STM32' : (corridorLevel === 'bad' ? 'clear path' : (state === 'ERROR' ? 'recover fault' : 'validate mode')),
+        !stm.running ? 'connect STM32' : (state === 'MANUAL' ? 'operator control' : (corridorLevel === 'bad' ? 'clear path' : (state === 'ERROR' ? 'recover fault' : 'validate mode'))),
         headline,
-        !stm.running || state === 'ERROR' || corridorLevel === 'bad' ? 'bad' : (corridorLevel === 'warn' ? 'warn' : 'good')
+        !stm.running || state === 'ERROR' || (rangeGateActive && corridorLevel === 'bad') ? 'bad' : (rangeGateActive && corridorLevel === 'warn' ? 'warn' : 'good')
       );
     }}
     function sensorState(value) {{
@@ -3562,6 +3572,7 @@ def html_page() -> str:
       const corridorLevel = [flState, fState, frState].some(item => item.cls === 'bad')
         ? 'bad'
         : ([flState, fState, frState].some(item => item.cls === 'warn') ? 'warn' : 'ok');
+      const manualRangeInfoOnly = data.current_state === 'MANUAL';
       const mpuAlive = Number(imu.OK || 0) === 1 && String(imu.WHO || '').toLowerCase() === '0x68';
       const imuFiltered = orientation.available && !orientation.calibrating;
       const sensorConfidence = Math.round((stm.running ? 20 : 0) + (liveCount / 3) * 45 + (mpuAlive ? 10 : 0) + (imuFiltered ? 20 : 0) + (hallAlive ? 5 : 0));
@@ -3614,9 +3625,9 @@ def html_page() -> str:
       );
       setFusion(
         'fusionDecision',
-        corridorLevel === 'bad' ? 'STOP' : (corridorLevel === 'warn' ? 'SLOW' : 'CLEAR'),
-        `${{modeLabel(data.current_state)}} guard / confidence ${{sensorConfidence}}%`,
-        corridorLevel === 'ok' ? 'good' : corridorLevel
+        manualRangeInfoOnly ? 'INFO' : (corridorLevel === 'bad' ? 'STOP' : (corridorLevel === 'warn' ? 'SLOW' : 'CLEAR')),
+        `${{modeLabel(data.current_state)}} guard / confidence ${{sensorConfidence}}%${{manualRangeInfoOnly ? ' / range informational' : ''}}`,
+        manualRangeInfoOnly ? 'good' : (corridorLevel === 'ok' ? 'good' : corridorLevel)
       );
       updateModeGuard(data, corridorLevel, nearest, liveCount, orientation, sensorConfidence);
       const cameraStatus = data.camera || {{}};
@@ -3639,8 +3650,10 @@ def html_page() -> str:
         }},
         {{
           label: 'Range Corridor',
-          level: corridorLevel === 'ok' ? 'good' : corridorLevel,
-          detail: nearest ? `${{nearest.cm.toFixed(0)}} cm nearest / ${{liveCount}} of 3 live` : `no valid echo / ${{liveCount}} of 3 live`,
+          level: manualRangeInfoOnly ? 'good' : (corridorLevel === 'ok' ? 'good' : corridorLevel),
+          detail: manualRangeInfoOnly
+            ? (nearest ? `manual info only / ${{nearest.cm.toFixed(0)}} cm nearest / ${{liveCount}} of 3 live` : `manual info only / no valid echo / ${{liveCount}} of 3 live`)
+            : (nearest ? `${{nearest.cm.toFixed(0)}} cm nearest / ${{liveCount}} of 3 live` : `no valid echo / ${{liveCount}} of 3 live`),
         }},
         {{
           label: 'IMU Attitude',
