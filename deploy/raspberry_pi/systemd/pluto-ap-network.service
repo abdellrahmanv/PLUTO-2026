@@ -1,7 +1,7 @@
 [Unit]
 Description=PLUTO Wi-Fi access point network address
-DefaultDependencies=no
-After=local-fs.target
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
 Before=network-pre.target pluto-hostapd.service pluto-dnsmasq.service pluto-captive-portal.service
 Wants=network-pre.target
 
@@ -9,7 +9,8 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/pluto/pluto.env
-ExecStart=/bin/sh -c 'rfkill unblock wifi || true; ip link set "$PLUTO_WIFI_IFACE" down || true; ip addr flush dev "$PLUTO_WIFI_IFACE" || true; ip addr add "$PLUTO_AP_IP/24" dev "$PLUTO_WIFI_IFACE"; ip link set "$PLUTO_WIFI_IFACE" up'
+TimeoutStartSec=75
+ExecStart=/bin/sh -c 'command -v rfkill >/dev/null 2>&1 && rfkill unblock wifi || true; i=0; while ! ip link show "$PLUTO_WIFI_IFACE" >/dev/null 2>&1; do i=$((i + 1)); if [ "$i" -ge 60 ]; then echo "Timed out waiting for $PLUTO_WIFI_IFACE" >&2; exit 1; fi; sleep 1; done; ip link set "$PLUTO_WIFI_IFACE" down || true; ip addr flush dev "$PLUTO_WIFI_IFACE" || true; ip addr add "$PLUTO_AP_IP/24" dev "$PLUTO_WIFI_IFACE"; ip link set "$PLUTO_WIFI_IFACE" up'
 ExecStop=/bin/sh -c 'ip addr flush dev "$PLUTO_WIFI_IFACE" || true'
 
 [Install]
