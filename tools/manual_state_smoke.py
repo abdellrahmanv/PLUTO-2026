@@ -10,11 +10,53 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+from types import SimpleNamespace
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from pluto_runtime.web_shell import HardwareDevice, ManualRuntime, PlutoWebContext
 
 
 HOST = "127.0.0.1"
 PORT = 18082
 BASE = f"http://{HOST}:{PORT}"
+
+
+class FakeModeManager:
+    current_state = "MANUAL"
+
+
+class FakeStm32Link:
+    def __init__(self) -> None:
+        self.last_drive: tuple[int, int] | None = None
+
+    def send_drive(self, speed: int, steer: int) -> dict:
+        self.last_drive = (speed, steer)
+        return {"ok": True, "detail": f"ACK:DRIVE {speed},{steer}"}
+
+    def get_status(self) -> SimpleNamespace:
+        return SimpleNamespace(obstacles={"F": 43.0, "FL": 43.0, "FR": 43.0})
+
+
+def validate_manual_ignores_ultrasonic_gate() -> None:
+    context = PlutoWebContext.__new__(PlutoWebContext)
+    context.mode_manager = FakeModeManager()
+    context.manual = ManualRuntime(enabled=True)
+    context.hardware = {
+        "stm32": HardwareDevice("STM32 motor safety controller", True, connected=True, port="COM_TEST"),
+    }
+    context.stm32_link = FakeStm32Link()
+    context.log = lambda _level, _message: None
+
+    result = PlutoWebContext.manual_drive(context, 100, 0)
+    assert result["accepted"] is True, result
+    assert result["speed"] == 100, result
+    assert result["blocked_reason"] is None, result
+    assert context.stm32_link.last_drive == (100, 0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,6 +160,7 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
 
 def main() -> int:
     args = parse_args()
+    validate_manual_ignores_ultrasonic_gate()
     base = f"http://{args.host}:{args.port}"
     proc = None
     if not args.external_server:

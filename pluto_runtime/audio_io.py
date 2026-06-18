@@ -464,7 +464,7 @@ def is_preferred_audio(name: str, kind: str) -> bool:
     text = name.lower()
     if kind == "capture":
         return any(token in text for token in ("headset", "headphone", "camera", "webcam", "usb", "mic", "microphone"))
-    return any(token in text for token in ("headphone", "speaker", "usb", "audio"))
+    return any(token in text for token in ("speaker", "usb", "headset"))
 
 
 def device_matches(device: AudioDevice, preferred: str | None) -> bool:
@@ -495,13 +495,9 @@ def select_playback_device(devices: list[AudioDevice], preferred: str | None = N
             device.preferred = True
             return device
     for device in devices:
-        if "headphone" in device.name.lower():
-            device.preferred = True
-            return device
-    for device in devices:
         if device.preferred:
             return device
-    return devices[0] if devices else None
+    return None
 
 
 def package_available(name: str) -> bool:

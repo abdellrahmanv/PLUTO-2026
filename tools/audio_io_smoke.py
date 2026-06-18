@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pluto_runtime.audio_io import AudioRuntime
+from pluto_runtime.audio_io import AudioRuntime, parse_alsa_devices, select_playback_device
 
 
 HOST = "127.0.0.1"
@@ -80,6 +80,23 @@ def validate_status(status: dict, require_microphone: bool, require_speaker: boo
         assert status["selected_speaker"], status
 
 
+def validate_playback_selection_policy() -> None:
+    headphone_only = """
+card 0: Headphones [bcm2835 Headphones], device 0: bcm2835 Headphones [bcm2835 Headphones]
+"""
+    headphone_devices = parse_alsa_devices(headphone_only, "playback")
+    assert headphone_devices, "headphone playback fixture did not parse"
+    assert select_playback_device(headphone_devices) is None, "analog Headphones must not auto-confirm speaker"
+    assert select_playback_device(headphone_devices, "Headphones") is headphone_devices[0]
+
+    usb_speaker = """
+card 1: Speaker [USB Speaker], device 0: USB Audio [USB Audio]
+"""
+    usb_devices = parse_alsa_devices(usb_speaker, "playback")
+    selected = select_playback_device(usb_devices)
+    assert selected is usb_devices[0], "USB speaker should auto-confirm"
+
+
 def run_local_checks(args: argparse.Namespace) -> None:
     audio = AudioRuntime(preferred_microphone=args.microphone_device, preferred_speaker=args.speaker_device)
     status = audio.status()
@@ -119,6 +136,7 @@ def run_web_checks(base: str, args: argparse.Namespace) -> None:
 
 def main() -> int:
     args = parse_args()
+    validate_playback_selection_policy()
     run_local_checks(args)
 
     base = f"http://{args.host}:{args.port}"
