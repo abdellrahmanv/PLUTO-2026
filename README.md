@@ -37,6 +37,7 @@ python3 tools/stm32_probe.py
 python3 tools/uno_probe.py
 python3 tools/web_shell_smoke.py
 python3 tools/validation_center_smoke.py
+python3 tools/pi_deployment_smoke.py
 python3 -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
 /home/pi/yolo/env/bin/python -m pluto_runtime.web_shell --host 0.0.0.0 --port 8080
 ```
@@ -63,3 +64,9 @@ For laptop UI-only checks without required robot hardware:
 The website includes a Stage 1 Validation Center that runs safe or dry-run
 validation tools from the operator console. Hardware-required buttons stay
 disabled until the matching device is detected.
+
+## Raspberry Pi Wi-Fi Portal
+
+For final deployment where the Pi starts the website automatically and opens it
+for devices that join the PLUTO Wi-Fi network, see
+`DEPLOY_RASPBERRY_PI_WIFI.md`.

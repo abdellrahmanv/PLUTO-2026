@@ -110,6 +110,18 @@ Expected pass evidence:
 WEB_SHELL_SMOKE PASS
 ```
 
+Raspberry Pi Wi-Fi/autostart deployment smoke:
+
+```bash
+python3 tools/pi_deployment_smoke.py
+```
+
+Expected pass evidence:
+
+```text
+PI_DEPLOYMENT_SMOKE PASS
+```
+
 The website shell displays a production-style mission readiness strip, system
 state, hardware status, blocked/allowed transitions, logs, dry-run evidence,
 and emergency stop. It does not expose raw motor routes.

@@ -39,6 +39,27 @@ cd /home/pi/PLUTO-2026
 
 Leave that terminal open. The website stops when this command stops.
 
+## Automatic Boot + PLUTO Wi-Fi
+
+For the deployment mode where the website starts on boot and devices that join
+the Raspberry Pi Wi-Fi are redirected to the console, use:
+
+```bash
+cd /home/pi/PLUTO-2026
+sudo deploy/raspberry_pi/install_pluto_wifi_portal.sh
+sudo reboot
+```
+
+Default Wi-Fi:
+
+```text
+SSID: PLUTO-OPS
+Password: pluto2026
+Website: http://192.168.50.1:8080/
+```
+
+Full instructions live in `DEPLOY_RASPBERRY_PI_WIFI.md`.
+
 ## Start in Background
 
 Use this when you want the website to keep running after closing the SSH terminal:

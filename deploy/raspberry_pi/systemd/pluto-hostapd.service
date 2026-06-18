@@ -1,0 +1,13 @@
+[Unit]
+Description=PLUTO Wi-Fi access point
+After=pluto-ap-network.service
+Requires=pluto-ap-network.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd /etc/pluto/hostapd.conf
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

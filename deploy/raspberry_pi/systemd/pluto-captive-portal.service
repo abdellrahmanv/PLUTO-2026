@@ -1,0 +1,15 @@
+[Unit]
+Description=PLUTO captive portal redirect
+After=pluto-web.service pluto-dnsmasq.service
+Wants=pluto-web.service pluto-dnsmasq.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pluto/pluto.env
+WorkingDirectory=__PLUTO_REPO__
+ExecStart=/bin/sh -c 'exec "$PLUTO_PYTHON" -m pluto_runtime.captive_portal --host 0.0.0.0 --port 80 --target-url "$PLUTO_PORTAL_TARGET"'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+interface={{PLUTO_WIFI_IFACE}}
+bind-interfaces
+listen-address={{PLUTO_AP_IP}}
+domain-needed
+bogus-priv
+dhcp-authoritative
+dhcp-range={{PLUTO_DHCP_START}},{{PLUTO_DHCP_END}},255.255.255.0,12h
+dhcp-option=3,{{PLUTO_AP_IP}}
+dhcp-option=6,{{PLUTO_AP_IP}}
+address=/#/{{PLUTO_AP_IP}}

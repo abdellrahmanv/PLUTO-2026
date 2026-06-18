@@ -1,10 +1,10 @@
 # Feature Memory: Deployment Wi-Fi Captive Portal
 
-Status: requirement/design added, implementation pending
+Status: repo implementation added, awaiting Raspberry Pi field validation
 
-Last updated: 2026-06-08
+Last updated: 2026-06-18
 
-Last validated: not yet validated on Raspberry Pi network hardware
+Last validated: 2026-06-18 repo smoke test only; not yet validated on Raspberry Pi network hardware
 
 Owner: Pi / deployment
 
@@ -32,10 +32,10 @@ Wi-Fi login pages.
 
 ## Design Decision
 
-This is recorded as a future deployment requirement, not an immediate feature.
-The current web shell remains unchanged. Final implementation should configure
-the Raspberry Pi as an access point/captive portal only after the web shell,
-mode manager, and emergency stop routes are validated.
+The repo now includes an installable Raspberry Pi deployment path. The installer
+configures the web shell as a boot service, configures the Pi Wi-Fi interface as
+an access point, serves DHCP/DNS for joined devices, and runs a small captive
+portal redirect helper on port 80.
 
 The captive portal is only a navigation helper. It must not grant motion
 authority, bypass any configured authentication, or bypass mode-manager and
@@ -59,6 +59,16 @@ External dependencies:
 - DNS/HTTP captive portal redirect service.
 - PLUTO web shell running on the Raspberry Pi.
 
+Repo artifacts:
+
+- `DEPLOY_RASPBERRY_PI_WIFI.md`
+- `deploy/raspberry_pi/install_pluto_wifi_portal.sh`
+- `deploy/raspberry_pi/systemd/*.service`
+- `deploy/raspberry_pi/hostapd.conf.in`
+- `deploy/raspberry_pi/dnsmasq.conf.in`
+- `pluto_runtime/captive_portal.py`
+- `tools/pi_deployment_smoke.py`
+
 ## Runtime Behavior
 
 During final deployment, the Raspberry Pi should advertise the robot operations
@@ -79,6 +89,7 @@ requests remain blocked.
 | Test ID | Method | Expected Result | Last Result |
 | --- | --- | --- | --- |
 | VER-WEB-012 | Join Raspberry Pi deployment Wi-Fi from phone/tablet | PLUTO website auto-opens or redirects; motion authority is not granted by join alone | not run |
+| VER-WEB-012A | Run `python3 tools/pi_deployment_smoke.py` | Captive portal assets exist and local redirect helper handles probe URLs | PASS on repo smoke, 2026-06-18 |
 
 ## Failure Modes
 
@@ -104,3 +115,4 @@ must never move the robot, enter a motion mode, clear ERROR, or bypass e-stop.
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-06-08 | Added deployment captive-portal requirement memory | User requested final Raspberry Pi Wi-Fi auto-open behavior |
+| 2026-06-18 | Added systemd/AP/DNS/captive portal installer and smoke test | Prepare repo before Raspberry Pi field install |
