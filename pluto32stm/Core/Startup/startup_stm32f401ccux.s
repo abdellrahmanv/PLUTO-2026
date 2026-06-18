@@ -80,6 +80,7 @@ LoopCopyDataInit:
   cmp r4, r1
   bcc CopyDataInit
   
+
 /* Zero fill the bss segment. */
   ldr r2, =_sbss
   ldr r4, =_ebss

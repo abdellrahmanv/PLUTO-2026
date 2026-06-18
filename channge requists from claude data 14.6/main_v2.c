@@ -11,9 +11,9 @@
  * INTERRUPT PRIORITY TABLE (lower number = higher priority):
  *   PreemptPriority 0 — TIM3 (Stepper ISR)         ← highest, untouchable
  *   PreemptPriority 1 — EXTI1/5/7 (Sonar Echo)     ← fast capture
- *   PreemptPriority 2 — USART1 (Hoverboard)        ← stream decode
- *   PreemptPriority 3 — USB OTG FS                 ← command intake
- *   PreemptPriority 15 — SysTick (HAL)             ← lowest
+ *   PreemptPriority 2 — USART1 (Hoverboard)         ← stream decode
+ *   PreemptPriority 3 — USB OTG FS                  ← command intake
+ *   PreemptPriority 15 — SysTick (HAL)              ← lowest
  *
  * OWNERSHIP MAP:
  *   TIM3 ISR        → stepper pulse generation, ramp, step counting
@@ -92,47 +92,19 @@ typedef struct {
 #define BAT_MIN_VOLTAGE     34.0f
 #define HB_ERROR_MAX        3
 
-// Stepper constants
+// Stepper ramp
 #define STEPPER_MAX_SPS     3000
 #define STEPPER_MIN_SPS     100
-
-// TB6600 common-anode configuration
-#define STEPPER_PULSE_US       50U
-#define STEPPER_COMMON_ANODE   1U
-#define STEPPER_EN_USED        1U
-
-#if STEPPER_COMMON_ANODE
-#define STEPPER_STEP_ACTIVE    GPIO_PIN_RESET
-#define STEPPER_STEP_IDLE      GPIO_PIN_SET
-#define STEPPER_DIR_POSITIVE   GPIO_PIN_RESET
-#define STEPPER_DIR_NEGATIVE   GPIO_PIN_SET
-#else
-#define STEPPER_STEP_ACTIVE    GPIO_PIN_SET
-#define STEPPER_STEP_IDLE      GPIO_PIN_RESET
-#define STEPPER_DIR_POSITIVE   GPIO_PIN_SET
-#define STEPPER_DIR_NEGATIVE   GPIO_PIN_RESET
-#endif
-
-#define STEPPER_EN_ACTIVE      GPIO_PIN_RESET
-#define STEPPER_EN_IDLE        GPIO_PIN_SET
+#define STEPPER_ACCEL_STEPS 50    // steps to reach full speed from min
 
 // TIM3 base tick at 1MHz (1us per tick)
+// Period set dynamically per step interval
 #define TIM3_PRESCALER      (84 - 1)   // 84MHz / 84 = 1MHz tick
 
 // Sonar
 #define SONAR_TRIGGER_US    10
 #define SONAR_CYCLE_MS      60          // one sonar per 60ms → full scan = 180ms
 #define SONAR_TIMEOUT_CYCLES (84000000 / 1000 * 30)  // 30ms in cycles
-
-// IMU / MPU6050
-#define IMU_REG_PWR_MGMT_1  0x6B
-#define IMU_REG_WHO_AM_I    0x75
-#define IMU_REG_DATA_START  0x3B
-
-#define IMU_SCL_GPIO_Port   GPIOB
-#define IMU_SCL_Pin         GPIO_PIN_6
-#define IMU_SDA_GPIO_Port   GPIOB
-#define IMU_SDA_Pin         GPIO_PIN_7
 
 /* ============================================================================
  * GPIO MACROS
@@ -173,6 +145,8 @@ typedef struct {
 
 /* ============================================================================
  * USB RING BUFFER
+ * ISR writes head. Main loop reads tail. No locks needed on Cortex-M4
+ * as long as head/tail are uint16_t (naturally atomic on 32-bit bus).
  * ============================================================================ */
 #define USB_RING_SIZE       256   // must be power of 2
 #define USB_RING_MASK       (USB_RING_SIZE - 1)
@@ -183,6 +157,7 @@ volatile uint16_t usbRingTail = 0;   // read/written by main loop only
 
 /* ============================================================================
  * HOVERBOARD UART RING BUFFER
+ * HAL_UART interrupt fills this. Main loop decodes packets from it.
  * ============================================================================ */
 #define HB_RING_SIZE        64
 #define HB_RING_MASK        (HB_RING_SIZE - 1)
@@ -190,10 +165,13 @@ volatile uint16_t usbRingTail = 0;   // read/written by main loop only
 volatile uint8_t  hbRing[HB_RING_SIZE];
 volatile uint16_t hbRingHead = 0;
 volatile uint16_t hbRingTail = 0;
-uint8_t           hbRxByte   = 0;   // single-byte UART interrupt receiver
+uint8_t           hbRxByte   = 0;   // single-byte DMA target for UART IT
 
 /* ============================================================================
  * STEPPER STATE — shared between main and TIM3 ISR
+ * All fields written by main before setting stepperRunning.
+ * Once running, ISR owns stepsCount and stepperRunning.
+ * Main only reads stepperRunning to check completion.
  * ============================================================================ */
 typedef struct {
     volatile uint8_t  running;          // ISR clears when done
@@ -201,19 +179,17 @@ typedef struct {
     volatile int32_t  stepsCount;
     volatile uint32_t currentPeriod_us; // TIM3 period for this arm
     volatile uint32_t targetPeriod_us;
+    volatile uint32_t accelCounter;
     volatile uint8_t  doneFlag;         // ISR sets, main reads+clears to send ACK
     GPIO_TypeDef*     stepPort;
     uint16_t          stepPin;
     GPIO_TypeDef*     enPort;
     uint16_t          enPin;
-    // Dynamic acceleration variables
-    volatile float    speedCurrent_sps;
-    volatile float    speedMax_sps;
-    volatile uint32_t accel_sps2;
-    volatile int32_t  decelSteps;
 } StepperState;
 
 StepperState stepper[2];
+
+// TIM3 handle — configured in stepperInit()
 TIM_HandleTypeDef htim3;
 
 /* ============================================================================
@@ -280,21 +256,6 @@ uint8_t  returning  = 0;
 uint8_t  piTimedOut = 0;
 
 /* ============================================================================
- * IMU STATE
- * ============================================================================ */
-uint8_t  imuPresent        = 0;
-uint8_t  imuAddr           = 0;
-uint8_t  imuWhoAmI         = 0;
-int16_t  imuAx             = 0;
-int16_t  imuAy             = 0;
-int16_t  imuAz             = 0;
-int16_t  imuGx             = 0;
-int16_t  imuGy             = 0;
-int16_t  imuGz             = 0;
-float    imuTempC          = 0.0f;
-uint32_t lastImuRead       = 0;
-
-/* ============================================================================
  * TIMING
  * ============================================================================ */
 uint32_t lastHBSend  = 0;
@@ -303,7 +264,7 @@ uint32_t lastLedToggle = 0;
 uint8_t  ledState    = 0;
 
 /* ============================================================================
- * RPi COMMAND BUFFER (main loop only)
+ * RPi COMMAND BUFFER (main loop only — no ISR access)
  * ============================================================================ */
 char    rpiBuffer[64];
 uint8_t rpiIdx = 0;
@@ -320,22 +281,22 @@ void     sendUSB(const char* msg);
 void     stepperInit(void);
 void     stepperEnable(uint8_t idx);
 void     stepperDisable(uint8_t idx);
-void     stepperMove(uint8_t idx, int32_t steps, uint32_t speed_sps, uint32_t accel);
+void     stepperMove(uint8_t idx, int32_t steps, uint32_t speed_sps);
 void     stepperStop(uint8_t idx);
 void     stepperStopAll(void);
-void     stepperCheckDone(void);
+void     stepperCheckDone(void);    // called from main — sends ACK
 
 // Sonar
 void     sonarInit(void);
 void     sonarTrigger(uint8_t idx);
-void     sonarUpdate(void);
+void     sonarUpdate(void);         // called from main — fires next trigger
 uint8_t  obstacleAhead(void);
 
 // Hoverboard
 void     hbUartInit(void);
 void     sendFOC(int16_t steer, int16_t speed);
 void     decodeFeedback(uint8_t* p);
-void     readHoverboard(void);
+void     readHoverboard(void);      // drains hbRing, decodes packets
 
 // RPi
 void     readRPi(void);
@@ -347,11 +308,6 @@ void     applyMotorSafety(void);
 float    distanceToHome(void);
 void     navigateToHome(void);
 
-// IMU
-void     imuBusInit(void);
-uint8_t  imuInit(void);
-void     readIMU(void);
-
 /* ============================================================================
  * DWT MICROSECOND UTILITIES
  * ============================================================================ */
@@ -361,7 +317,7 @@ void DWT_Init(void) {
     DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
-// Blocking microsecond delay
+// Blocking delay — ONLY used for sonar trigger pulse (10us) and USB retry
 void delay_us(uint32_t us) {
     uint32_t start = DWT->CYCCNT;
     uint32_t ticks = us * (SystemCoreClock / 1000000UL);
@@ -380,6 +336,18 @@ void sendUSB(const char* msg) {
 
 /* ============================================================================
  * STEPPER — TIM3 ISR ARCHITECTURE
+ *
+ * TIM3 runs at 1MHz (1us tick). Period is set to stepperCurrentPeriod_us.
+ * Each overflow = one step pulse for whichever arm needs it.
+ *
+ * Both arms share TIM3 but we interleave them:
+ * - Arm 0 pulses on even ISR calls
+ * - Arm 1 pulses on odd ISR calls
+ * The minimum period is set to the faster of the two arms each cycle.
+ *
+ * Ramp: accelCounter tracks steps taken. For first STEPPER_ACCEL_STEPS,
+ * period decreases linearly from startPeriod to targetPeriod.
+ * Same decel at the end.
  * ============================================================================ */
 void stepperInit(void) {
     // ARM 0 — PB8 STEP, PB10 EN
@@ -410,120 +378,102 @@ void stepperInit(void) {
 
     HAL_TIM_Base_Init(&htim3);
 
-    // Priority 0 — highest priority on system
-    HAL_GPIO_WritePin(EN_PORT, EN_PIN_NUM, STEPPER_EN_IDLE);
-    HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, STEPPER_EN_IDLE);
-    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, STEPPER_STEP_IDLE);
-    HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, STEPPER_STEP_IDLE);
-
+    // Priority 0 — highest on system
     HAL_NVIC_SetPriority(TIM3_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(TIM3_IRQn);
 
     HAL_TIM_Base_Start_IT(&htim3);
 }
 
-// TIM3 ISR — handles pulse timing and generation
+// TIM3 ISR — called every stepPeriod microseconds
+// This is the ONLY place that generates STEP pulses
 void TIM3_IRQHandler(void) {
     if (__HAL_TIM_GET_FLAG(&htim3, TIM_FLAG_UPDATE) &&
         __HAL_TIM_GET_IT_SOURCE(&htim3, TIM_IT_UPDATE)) {
 
         __HAL_TIM_CLEAR_IT(&htim3, TIM_IT_UPDATE);
 
-        static uint8_t armTurn = 0;  // interleave arms to share timer
+        static uint8_t armTurn = 0;  // interleave arms
+
         uint8_t idx = armTurn;
         armTurn = 1 - armTurn;
 
         if (!stepper[idx].running) return;
 
-        // Dynamic acceleration/deceleration calculations
-        if (stepper[idx].accel_sps2 > 0) {
-            float dt = stepper[idx].currentPeriod_us / 1000000.0f;
-            int32_t stepsRemaining = stepper[idx].stepsTarget - stepper[idx].stepsCount;
-            
-            if (stepsRemaining <= stepper[idx].decelSteps) {
-                stepper[idx].speedCurrent_sps -= stepper[idx].accel_sps2 * dt;
-                if (stepper[idx].speedCurrent_sps < 100.0f) {
-                    stepper[idx].speedCurrent_sps = 100.0f;
-                }
-            } else if (stepper[idx].speedCurrent_sps < stepper[idx].speedMax_sps) {
-                stepper[idx].speedCurrent_sps += stepper[idx].accel_sps2 * dt;
-                if (stepper[idx].speedCurrent_sps > stepper[idx].speedMax_sps) {
-                    stepper[idx].speedCurrent_sps = stepper[idx].speedMax_sps;
-                }
-            }
-            stepper[idx].currentPeriod_us = 1000000UL / (uint32_t)stepper[idx].speedCurrent_sps;
+        // Ramp calculation
+        uint32_t remaining = stepper[idx].stepsTarget - stepper[idx].stepsCount;
+        uint32_t rampSteps = STEPPER_ACCEL_STEPS;
+
+        // Accel phase
+        if (stepper[idx].stepsCount < rampSteps) {
+            uint32_t rampRange = stepper[idx].currentPeriod_us - stepper[idx].targetPeriod_us;
+            stepper[idx].currentPeriod_us = stepper[idx].currentPeriod_us -
+                (rampRange / rampSteps);
+            if (stepper[idx].currentPeriod_us < stepper[idx].targetPeriod_us)
+                stepper[idx].currentPeriod_us = stepper[idx].targetPeriod_us;
+        }
+        // Decel phase
+        else if (remaining <= rampSteps) {
+            uint32_t rampRange = stepper[idx].currentPeriod_us - (1000000UL / STEPPER_MIN_SPS);
+            stepper[idx].currentPeriod_us = stepper[idx].currentPeriod_us +
+                (rampRange / rampSteps);
+            if (stepper[idx].currentPeriod_us > (1000000UL / STEPPER_MIN_SPS))
+                stepper[idx].currentPeriod_us = 1000000UL / STEPPER_MIN_SPS;
         }
 
-        // Update timer auto-reload value
+        // Update timer period dynamically
         __HAL_TIM_SET_AUTORELOAD(&htim3, stepper[idx].currentPeriod_us);
 
-        // Generate STEP pulse using configured active/idle states
-        HAL_GPIO_WritePin(stepper[idx].stepPort, stepper[idx].stepPin, STEPPER_STEP_ACTIVE);
-        delay_us(STEPPER_PULSE_US);
-        HAL_GPIO_WritePin(stepper[idx].stepPort, stepper[idx].stepPin, STEPPER_STEP_IDLE);
+        // Generate STEP pulse — 2us HIGH
+        HAL_GPIO_WritePin(stepper[idx].stepPort, stepper[idx].stepPin, GPIO_PIN_SET);
+        // Minimal inline delay — 2us = 168 cycles at 84MHz
+        volatile uint32_t d = 168; while(d--);
+        HAL_GPIO_WritePin(stepper[idx].stepPort, stepper[idx].stepPin, GPIO_PIN_RESET);
 
         stepper[idx].stepsCount++;
 
+        // Done?
         if (stepper[idx].stepsCount >= stepper[idx].stepsTarget) {
             stepper[idx].running  = 0;
             stepper[idx].doneFlag = 1;
-            stepperDisable(idx);
+            // Disable driver — EN HIGH
+            HAL_GPIO_WritePin(stepper[idx].enPort, stepper[idx].enPin, GPIO_PIN_SET);
         }
     }
 }
 
 void stepperEnable(uint8_t idx) {
-    if (idx == 1) HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, STEPPER_EN_ACTIVE);
-    else          HAL_GPIO_WritePin(EN_PORT,  EN_PIN_NUM,  STEPPER_EN_ACTIVE);
+    HAL_GPIO_WritePin(stepper[idx].enPort, stepper[idx].enPin, GPIO_PIN_RESET);
 }
 
 void stepperDisable(uint8_t idx) {
-    if (idx == 1) {
-        HAL_GPIO_WritePin(STEP2_PORT, STEP2_PIN_NUM, STEPPER_STEP_IDLE);
-        HAL_GPIO_WritePin(EN2_PORT, EN2_PIN_NUM, STEPPER_EN_IDLE);
-    } else {
-        HAL_GPIO_WritePin(STEP_PORT, STEP_PIN_NUM, STEPPER_STEP_IDLE);
-        HAL_GPIO_WritePin(EN_PORT, EN_PIN_NUM, STEPPER_EN_IDLE);
-    }
+    HAL_GPIO_WritePin(stepper[idx].enPort, stepper[idx].enPin, GPIO_PIN_SET);
 }
 
-void stepperMove(uint8_t idx, int32_t steps, uint32_t speed_sps, uint32_t accel) {
+void stepperMove(uint8_t idx, int32_t steps, uint32_t speed_sps) {
     if (idx > 1) return;
 
     if (speed_sps < STEPPER_MIN_SPS) speed_sps = STEPPER_MIN_SPS;
     if (speed_sps > STEPPER_MAX_SPS) speed_sps = STEPPER_MAX_SPS;
 
-    // Set direction using configured direction macro
+    uint32_t targetPeriod = 1000000UL / speed_sps;
+    uint32_t startPeriod  = 1000000UL / STEPPER_MIN_SPS;
+
+    // Set direction
     GPIO_TypeDef* dirPort = (idx == 0) ? DIR_PORT  : DIR2_PORT;
     uint16_t      dirPin  = (idx == 0) ? DIR_PIN_NUM : DIR2_PIN_NUM;
-    HAL_GPIO_WritePin(dirPort, dirPin, steps > 0 ? STEPPER_DIR_POSITIVE : STEPPER_DIR_NEGATIVE);
+    HAL_GPIO_WritePin(dirPort, dirPin, steps > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-    // Arm the ISR state
+    // Arm the ISR state — order matters: set all fields BEFORE setting running=1
     stepper[idx].stepsTarget      = labs(steps);
     stepper[idx].stepsCount       = 0;
-    stepper[idx].speedMax_sps     = (float)speed_sps;
-    stepper[idx].accel_sps2       = accel;
+    stepper[idx].targetPeriod_us  = targetPeriod;
+    stepper[idx].currentPeriod_us = startPeriod;
     stepper[idx].doneFlag         = 0;
-
-    if (accel > 0) {
-        stepper[idx].speedCurrent_sps = 100.0f;
-        int32_t stepsToMax = (speed_sps * speed_sps) / (2 * accel);
-        if (stepper[idx].stepsTarget < 2 * stepsToMax) {
-            stepper[idx].decelSteps = stepper[idx].stepsTarget / 2;
-        } else {
-            stepper[idx].decelSteps = stepsToMax;
-        }
-    } else {
-        stepper[idx].speedCurrent_sps = (float)speed_sps;
-        stepper[idx].decelSteps = 0;
-    }
-
-    stepper[idx].currentPeriod_us = 1000000UL / (uint32_t)stepper[idx].speedCurrent_sps;
-    stepper[idx].targetPeriod_us  = 1000000UL / speed_sps;
 
     stepperEnable(idx);
 
-    // Memory barrier ensures writes complete before ISR sees running flag
+    // Arm ISR last — compiler barrier ensures above writes complete first
     __DSB();
     stepper[idx].running = 1;
 }
@@ -538,7 +488,7 @@ void stepperStopAll(void) {
     stepperStop(1);
 }
 
-// Checks if ISR completed movements, and sends ACKs to USB
+// Called from main loop — sends USB ACK when ISR sets doneFlag
 void stepperCheckDone(void) {
     if (stepper[0].doneFlag) {
         stepper[0].doneFlag = 0;
@@ -552,6 +502,15 @@ void stepperCheckDone(void) {
 
 /* ============================================================================
  * SONAR — EXTI ARCHITECTURE
+ *
+ * Main loop fires TRIG pulse (10us blocking — acceptable, it's the shortest
+ * blocking call in the system and only happens once per 60ms per sensor).
+ *
+ * EXTI ISR captures rising edge (echo start) and falling edge (echo end)
+ * using DWT->CYCCNT. Distance computed in ISR to keep main loop clean.
+ *
+ * GPIO must be reconfigured to EXTI mode on the echo pins.
+ * This is done in sonarInit() — replaces the INPUT mode from gpio.c.
  * ============================================================================ */
 void sonarInit(void) {
     sonar[0].trigPort = TRIG_FL_PORT; sonar[0].trigPin = TRIG_FL_PIN;
@@ -594,17 +553,20 @@ void sonarInit(void) {
     HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
-// EXTI callback — timed using DWT cycles (prevents clock wrap issues)
+// EXTI ISR callback — called by HAL from EXTI1_IRQHandler and EXTI9_5_IRQHandler
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     for (uint8_t i = 0; i < 3; i++) {
         if (GPIO_Pin != sonar[i].extiPin) continue;
         if (sonar[i].phase != SONAR_CAPTURING) return;
 
         if (HAL_GPIO_ReadPin(sonar[i].echoPort, sonar[i].echoPin) == GPIO_PIN_SET) {
+            // Rising edge — echo started
             sonar[i].echoStart = DWT->CYCCNT;
         } else {
+            // Falling edge — echo ended
             sonar[i].echoEnd = DWT->CYCCNT;
             uint32_t cycles = sonar[i].echoEnd - sonar[i].echoStart;
+            // Guard against timeout
             if (cycles < SONAR_TIMEOUT_CYCLES) {
                 // distance = (cycles / 84MHz) * 34000 cm/s / 2
                 sonar[i].distCm = ((float)cycles / 84000000.0f) * 17000.0f;
@@ -618,34 +580,34 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     }
 }
 
-// ISR Handlers
+// Required ISR stubs — HAL routes to HAL_GPIO_EXTI_Callback
 void EXTI1_IRQHandler(void)   { HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_1); }
 void EXTI9_5_IRQHandler(void) {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_5);
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_7);
 }
-void USART1_IRQHandler(void) {
-    HAL_UART_IRQHandler(&huart1);
-}
 
-// Triggers sonar measurement
+// Trigger one sonar — called from main loop every SONAR_CYCLE_MS
 void sonarTrigger(uint8_t idx) {
     sonar[idx].phase = SONAR_CAPTURING;
     sonar[idx].fresh = 0;
 
+    // 10us TRIG pulse — this is the ONLY acceptable blocking call in main loop
     HAL_GPIO_WritePin(sonar[idx].trigPort, sonar[idx].trigPin, GPIO_PIN_RESET);
     delay_us(2);
     HAL_GPIO_WritePin(sonar[idx].trigPort, sonar[idx].trigPin, GPIO_PIN_SET);
     delay_us(10);
     HAL_GPIO_WritePin(sonar[idx].trigPort, sonar[idx].trigPin, GPIO_PIN_RESET);
+    // EXTI ISR now handles the rest asynchronously
 }
 
-// Rotates trigger to next sonar sequentially
+// Called from main loop — rotate through sonars, no blocking
 void sonarUpdate(void) {
     uint32_t now = HAL_GetTick();
     if (now - lastSonarMs < SONAR_CYCLE_MS) return;
     lastSonarMs = now;
 
+    // Only trigger if previous sonar is done
     if (sonar[sonarIndex].phase == SONAR_IDLE) {
         sonarTrigger(sonarIndex);
         sonarIndex = (sonarIndex + 1) % 3;
@@ -659,21 +621,23 @@ uint8_t obstacleAhead(void) {
 }
 
 /* ============================================================================
- * HOVERBOARD UART
+ * HOVERBOARD UART — INTERRUPT-DRIVEN RING BUFFER
+ *
+ * HAL_UART_Receive_IT called once in init. Each received byte fires
+ * HAL_UART_RxCpltCallback which re-arms the receive and pushes to hbRing.
+ * Main loop drains hbRing and decodes packets.
  * ============================================================================ */
 void hbUartInit(void) {
-    // Enable USART1 Interrupt in NVIC with Priority 2
-    HAL_NVIC_SetPriority(USART1_IRQn, 2, 0);
-    HAL_NVIC_EnableIRQ(USART1_IRQn);
-
     // Start single-byte interrupt receive
     HAL_UART_Receive_IT(&huart1, &hbRxByte, 1);
 }
 
+// HAL UART receive complete callback
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
         hbRing[hbRingHead & HB_RING_MASK] = hbRxByte;
         hbRingHead++;
+        // Re-arm immediately
         HAL_UART_Receive_IT(&huart1, &hbRxByte, 1);
     }
 }
@@ -722,6 +686,7 @@ void decodeFeedback(uint8_t* p) {
     distCm += fabsf(v) * dt;
 }
 
+// Drains hbRing — called from main loop
 void readHoverboard(void) {
     while (hbRingTail != hbRingHead) {
         uint8_t b = hbRing[hbRingTail & HB_RING_MASK];
@@ -748,6 +713,8 @@ void readHoverboard(void) {
 
 /* ============================================================================
  * RPi COMMAND PARSING
+ * Reads from USB ring buffer (populated by CDC ISR in usbd_cdc_if.c).
+ * No blocking. No shared-state race — head written by ISR, tail by main only.
  * ============================================================================ */
 void readRPi(void) {
     while (usbRingTail != usbRingHead) {
@@ -791,20 +758,16 @@ void parseCommand(char* cmd) {
         int32_t  steps = atol(p);
         char*    comma = strchr(p, ',');
         uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-        char*    comma2= comma ? strchr(comma + 1, ',') : NULL;
-        uint32_t acc   = comma2 ? (uint32_t)atol(comma2 + 1) : 0;
         sendUSB("ACK:ARM\r\n");
-        if (steps != 0) stepperMove(0, steps, spd, acc);
+        if (steps != 0) stepperMove(0, steps, spd);
     }
     else if (strncmp(cmd, "CMD:ARM2:", 9) == 0) {
         char*    p     = cmd + 9;
         int32_t  steps = atol(p);
         char*    comma = strchr(p, ',');
         uint32_t spd   = comma ? (uint32_t)atol(comma + 1) : 200;
-        char*    comma2= comma ? strchr(comma + 1, ',') : NULL;
-        uint32_t acc   = comma2 ? (uint32_t)atol(comma2 + 1) : 0;
         sendUSB("ACK:ARM2\r\n");
-        if (steps != 0) stepperMove(1, steps, spd, acc);
+        if (steps != 0) stepperMove(1, steps, spd);
     }
     else if (strncmp(cmd, "CMD:RETURN", 10) == 0) {
         returning = 1;
@@ -842,11 +805,6 @@ void sendTelemetry(void) {
     snprintf(buf, sizeof(buf),
         "OBS:FL:%.0f,F:%.0f,FR:%.0f\r\n",
         sonar[0].distCm, sonar[1].distCm, sonar[2].distCm);
-    sendUSB(buf);
-
-    snprintf(buf, sizeof(buf),
-        "IMU:OK:%u,ADDR:0x%02X,WHO:0x%02X,AX:%d,AY:%d,AZ:%d,GX:%d,GY:%d,GZ:%d,TEMP:%.1f\r\n",
-        imuPresent, imuAddr, imuWhoAmI, imuAx, imuAy, imuAz, imuGx, imuGy, imuGz, imuTempC);
     sendUSB(buf);
 }
 
@@ -916,153 +874,6 @@ void navigateToHome(void) {
 }
 
 /* ============================================================================
- * IMU MPU6050 DRIVER
- * ============================================================================ */
-static int16_t be16(uint8_t hi, uint8_t lo) {
-    return (int16_t)((uint16_t)hi << 8 | lo);
-}
-
-void imuBusInit(void) {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    HAL_GPIO_WritePin(IMU_SCL_GPIO_Port, IMU_SCL_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IMU_SDA_GPIO_Port, IMU_SDA_Pin, GPIO_PIN_SET);
-    GPIO_InitStruct.Pin = IMU_SCL_Pin|IMU_SDA_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-}
-
-static void imuDelay(void) {
-    delay_us(4);
-}
-
-static void imuScl(uint8_t high) {
-    HAL_GPIO_WritePin(IMU_SCL_GPIO_Port, IMU_SCL_Pin, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    imuDelay();
-}
-
-static void imuSda(uint8_t high) {
-    HAL_GPIO_WritePin(IMU_SDA_GPIO_Port, IMU_SDA_Pin, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    imuDelay();
-}
-
-static uint8_t imuReadSda(void) {
-    return HAL_GPIO_ReadPin(IMU_SDA_GPIO_Port, IMU_SDA_Pin) == GPIO_PIN_SET;
-}
-
-static void imuStart(void) {
-    imuSda(1);
-    imuScl(1);
-    imuSda(0);
-    imuScl(0);
-}
-
-static void imuStop(void) {
-    imuSda(0);
-    imuScl(1);
-    imuSda(1);
-}
-
-static uint8_t imuWriteByte(uint8_t value) {
-    for (uint8_t bit = 0; bit < 8; bit++) {
-        imuSda((value & 0x80) != 0);
-        imuScl(1);
-        imuScl(0);
-        value <<= 1;
-    }
-    imuSda(1);
-    imuScl(1);
-    uint8_t ack = !imuReadSda();
-    imuScl(0);
-    return ack;
-}
-
-static uint8_t imuReadByte(uint8_t ack) {
-    uint8_t value = 0;
-    imuSda(1);
-    for (uint8_t bit = 0; bit < 8; bit++) {
-        value <<= 1;
-        imuScl(1);
-        if (imuReadSda()) value |= 1;
-        imuScl(0);
-    }
-    imuSda(ack ? 0 : 1);
-    imuScl(1);
-    imuScl(0);
-    imuSda(1);
-    return value;
-}
-
-static uint8_t imuWriteReg(uint8_t addr7, uint8_t reg, uint8_t value) {
-    imuStart();
-    if (!imuWriteByte((addr7 << 1) | 0)) { imuStop(); return 0; }
-    if (!imuWriteByte(reg)) { imuStop(); return 0; }
-    if (!imuWriteByte(value)) { imuStop(); return 0; }
-    imuStop();
-    return 1;
-}
-
-static uint8_t imuReadRegs(uint8_t addr7, uint8_t reg, uint8_t* data, uint8_t len) {
-    imuStart();
-    if (!imuWriteByte((addr7 << 1) | 0)) { imuStop(); return 0; }
-    if (!imuWriteByte(reg)) { imuStop(); return 0; }
-    imuStart();
-    if (!imuWriteByte((addr7 << 1) | 1)) { imuStop(); return 0; }
-    for (uint8_t i = 0; i < len; i++) {
-        data[i] = imuReadByte(i + 1 < len);
-    }
-    imuStop();
-    return 1;
-}
-
-uint8_t imuInit(void) {
-    uint8_t candidate[2] = {0x68, 0x69};
-    for (uint8_t i = 0; i < 2; i++) {
-        uint8_t who = 0;
-        if (imuReadRegs(candidate[i], IMU_REG_WHO_AM_I, &who, 1)) {
-            imuAddr = candidate[i];
-            imuWhoAmI = who;
-            imuWriteReg(imuAddr, IMU_REG_PWR_MGMT_1, 0x00);
-            HAL_Delay(50);
-            imuPresent = 1;
-            return 1;
-        }
-    }
-    imuPresent = 0;
-    imuAddr = 0;
-    imuWhoAmI = 0;
-    return 0;
-}
-
-void readIMU(void) {
-    uint32_t now = HAL_GetTick();
-    if (now - lastImuRead < 100) return;
-    lastImuRead = now;
-
-    if (!imuPresent) {
-        imuInit();
-        return;
-    }
-
-    uint8_t data[14];
-    if (!imuReadRegs(imuAddr, IMU_REG_DATA_START, data, sizeof(data))) {
-        imuPresent = 0;
-        return;
-    }
-
-    imuAx = be16(data[0], data[1]);
-    imuAy = be16(data[2], data[3]);
-    imuAz = be16(data[4], data[5]);
-    int16_t tempRaw = be16(data[6], data[7]);
-    imuGx = be16(data[8], data[9]);
-    imuGy = be16(data[10], data[11]);
-    imuGz = be16(data[12], data[13]);
-    imuTempC = ((float)tempRaw / 340.0f) + 36.53f;
-}
-
-/* ============================================================================
  * MAIN
  * ============================================================================ */
 int main(void) {
@@ -1092,13 +903,9 @@ int main(void) {
     HAL_GPIO_WritePin(TRIG_F_PORT,  TRIG_F_PIN,  GPIO_PIN_RESET);
     HAL_GPIO_WritePin(TRIG_FR_PORT, TRIG_FR_PIN, GPIO_PIN_RESET);
 
-    // IMU config
-    imuBusInit();
-    imuInit();
-
     // Wait for USB enumeration
     HAL_Delay(1500);
-    sendUSB("ID:STM32_MOTOR\r\n");
+    sendUSB("ID:STM32_MOTOR_V2\r\n");
 
     // Boot blinks
     for (int i = 0; i < 3; i++) {
@@ -1110,6 +917,8 @@ int main(void) {
 
     /* -----------------------------------------------------------------------
      * MAIN LOOP — ORCHESTRATION ONLY
+     * Nothing here blocks. Nothing here times pulses. Everything is event-driven.
+     * Loop runs at ~84MHz with no yield points other than short USB retries.
      * ----------------------------------------------------------------------- */
     while (1) {
         // 1 — drain hoverboard UART ring, decode packets
@@ -1127,25 +936,22 @@ int main(void) {
         // 5 — navigate home if returning
         if (returning) navigateToHome();
 
-        // 6 — read IMU if present (every 100ms)
-        readIMU();
-
-        // 7 — safety (always before FOC send)
+        // 6 — safety (always before FOC send)
         applyMotorSafety();
 
-        // 8 — send FOC command every 20ms
+        // 7 — send FOC command every 20ms
         if (HAL_GetTick() - lastHBSend >= 20) {
             lastHBSend = HAL_GetTick();
             sendFOC(cmdSteer, cmdSpeed);
         }
 
-        // 9 — telemetry every 100ms
+        // 8 — telemetry every 100ms
         if (HAL_GetTick() - lastTelSend >= 100) {
             lastTelSend = HAL_GetTick();
             sendTelemetry();
         }
 
-        // 10 — heartbeat LED (DUM-dum pattern)
+        // 9 — heartbeat LED (DUM-dum pattern)
         static uint32_t beatTimer = 0;
         static uint8_t  beatPhase = 0;
         static uint16_t pwmVal    = 0;

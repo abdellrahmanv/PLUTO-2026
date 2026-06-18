@@ -390,7 +390,7 @@ class Stm32SerialLink:
             time.sleep(0.01)
         return {"ok": False, "detail": f"RESET_HOME sent but ACK:RESET_HOME not received within {int(timeout_s * 1000)} ms", "command": "CMD:RESET_HOME"}
 
-    def send_arm(self, steps: int, speed: int = 200, wait_ack: bool = True, timeout_s: float = 0.45) -> dict[str, Any]:
+    def send_arm(self, steps: int, speed: int = 200, accel: int = 0, wait_ack: bool = True, timeout_s: float = 0.45) -> dict[str, Any]:
         """Send CMD:ARM:<steps>,<speed>. STM32 moves the NEMA stepper.
 
         [!] WARNING: This is a low-level primitive control command. It DOES NOT perform
@@ -409,7 +409,7 @@ class Stm32SerialLink:
             before = self._status.ack_arm_count
             self._status.arm_done = False
             self._status.arm_done_at = None
-        command = f"CMD:ARM:{int(steps)},{int(speed)}"
+        command = f"CMD:ARM:{int(steps)},{int(speed)},{int(accel)}"
         ok, detail = self.send_command(command)
         if not ok or not wait_ack:
             return {"ok": ok, "detail": detail, "command": command}
@@ -422,7 +422,7 @@ class Stm32SerialLink:
             time.sleep(0.01)
         return {"ok": False, "detail": f"ARM sent but ACK:ARM not received within {int(timeout_s * 1000)} ms", "command": command}
 
-    def send_arm2(self, steps: int, speed: int = 200, wait_ack: bool = True, timeout_s: float = 0.45) -> dict[str, Any]:
+    def send_arm2(self, steps: int, speed: int = 200, accel: int = 0, wait_ack: bool = True, timeout_s: float = 0.45) -> dict[str, Any]:
         """Send CMD:ARM2:<steps>,<speed> for the second NEMA driver.
 
         Same safety warning as send_arm(): this is a low-level primitive and
@@ -432,7 +432,7 @@ class Stm32SerialLink:
             before = self._status.ack_arm2_count
             self._status.arm2_done = False
             self._status.arm2_done_at = None
-        command = f"CMD:ARM2:{int(steps)},{int(speed)}"
+        command = f"CMD:ARM2:{int(steps)},{int(speed)},{int(accel)}"
         ok, detail = self.send_command(command)
         if not ok or not wait_ack:
             return {"ok": ok, "detail": detail, "command": command}

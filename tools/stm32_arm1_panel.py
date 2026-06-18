@@ -36,8 +36,8 @@ class PanelState:
     last_ack: str = "none"
     last_alert: str = "none"
     last_command: str = "none"
-    arm_steps: int = 100
-    arm_speed: int = 200
+    arm_steps: int = 800
+    arm_speed: int = 50
     raw_mode: bool = False
 
 
@@ -101,8 +101,9 @@ Commands:
   + / u             jog Arm 1 positive by current steps
   - / d             jog Arm 1 negative by current steps
   move <steps>      jog Arm 1 by exact signed steps, example: move -250
+  move2 <steps>     jog Arm 2 by exact signed steps, example: move2 5000
   steps <n>         set jog step amount, example: steps 150
-  speed <n>         set Arm 1 speed, example: speed 250
+  speed <n>         set Arm speed, example: speed 250
   stop / s          send CMD:STOP
   ping / p          send CMD:PING
   raw <command>     send exact command, example: raw CMD:ARM:100,200
@@ -110,8 +111,9 @@ Commands:
   help / h          show this menu
   quit / q          exit
 
-Arm 1 STM32 command used by this panel:
+Arm commands used by this panel:
   CMD:ARM:<steps>,<speed>
+  CMD:ARM2:<steps>,<speed>
 """
     )
 
@@ -145,16 +147,20 @@ def handle_command(text: str, ser: serial.Serial, state: PanelState) -> bool:
 
     parts = text.split()
     if len(parts) == 2 and parts[0].lower() == "steps":
-        state.arm_steps = max(1, min(5000, abs(int(parts[1]))))
-        print(f"\nArm 1 jog steps set to {state.arm_steps}")
+        state.arm_steps = max(0, min(2147483647, abs(int(parts[1]))))
+        print(f"\nArm jog steps set to {state.arm_steps}")
         return True
     if len(parts) == 2 and parts[0].lower() == "speed":
         state.arm_speed = max(1, min(3000, abs(int(parts[1]))))
-        print(f"\nArm 1 speed set to {state.arm_speed}")
+        print(f"\nArm speed set to {state.arm_speed}")
         return True
     if len(parts) == 2 and parts[0].lower() == "move":
-        steps = max(-10000, min(10000, int(parts[1])))
+        steps = max(-2147483648, min(2147483647, int(parts[1])))
         send_line(ser, state, f"CMD:ARM:{steps},{state.arm_speed}")
+        return True
+    if len(parts) == 2 and parts[0].lower() == "move2":
+        steps = max(-2147483648, min(2147483647, int(parts[1])))
+        send_line(ser, state, f"CMD:ARM2:{steps},{state.arm_speed}")
         return True
     if lower.startswith("raw "):
         send_line(ser, state, text[4:].strip())
@@ -197,12 +203,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=None, help="Serial port, e.g. COM8 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--steps", type=int, default=100)
-    parser.add_argument("--speed", type=int, default=200)
+    parser.add_argument("--steps", type=int, default=800)
+    parser.add_argument("--speed", type=int, default=50)
     args = parser.parse_args()
 
     port = find_port(args.port)
-    state = PanelState(arm_steps=max(1, abs(args.steps)), arm_speed=max(1, abs(args.speed)))
+    state = PanelState(arm_steps=max(0, abs(args.steps)), arm_speed=max(1, abs(args.speed)))
     commands: queue.Queue[str] = queue.Queue()
 
     print("PLUTO STM32 terminal panel")
