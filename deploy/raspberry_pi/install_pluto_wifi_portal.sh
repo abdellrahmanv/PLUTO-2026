@@ -157,6 +157,7 @@ EOF
   systemctl reload NetworkManager 2>/dev/null || true
 fi
 
+systemctl stop hostapd dnsmasq 2>/dev/null || true
 systemctl disable hostapd dnsmasq 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable \
