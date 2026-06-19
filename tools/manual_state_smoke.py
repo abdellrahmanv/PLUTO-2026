@@ -34,9 +34,10 @@ class FakeStm32Link:
     def __init__(self) -> None:
         self.last_drive: tuple[int, int] | None = None
 
-    def send_drive(self, speed: int, steer: int) -> dict:
+    def send_drive(self, speed: int, steer: int, wait_ack: bool = True) -> dict:
         self.last_drive = (speed, steer)
-        return {"ok": True, "detail": f"ACK:DRIVE {speed},{steer}"}
+        detail = f"ACK:DRIVE {speed},{steer}" if wait_ack else "sent"
+        return {"ok": True, "detail": detail}
 
     def get_status(self) -> SimpleNamespace:
         return SimpleNamespace(obstacles={"F": 43.0, "FL": 43.0, "FR": 43.0})
@@ -57,6 +58,14 @@ def validate_manual_ignores_ultrasonic_gate() -> None:
     assert result["speed"] == 100, result
     assert result["blocked_reason"] is None, result
     assert context.stm32_link.last_drive == (100, 0)
+
+    fast = PlutoWebContext.manual_drive(context, 999, -999)
+    assert fast["accepted"] is True, fast
+    assert fast["speed"] == 400, fast
+    assert fast["steer"] == -400, fast
+    assert fast["serial"]["detail"] == "sent", fast
+    assert context.manual.base_speed_setting == 400
+    assert context.manual.base_steer_setting == 400
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,10 +126,10 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
     assert status_code == 200, status_code
     status = json.loads(raw_status.decode("utf-8"))
     assert "manual" in status
-    assert status["manual"]["max_speed"] == 150
-    assert status["manual"]["max_steer"] == 80
-    assert status["manual"]["base_speed_setting"] == 150
-    assert status["manual"]["base_steer_setting"] == 80
+    assert status["manual"]["max_speed"] == 400
+    assert status["manual"]["max_steer"] == 400
+    assert status["manual"]["base_speed_setting"] == 100
+    assert status["manual"]["base_steer_setting"] == 100
     assert status["manual"]["arm_step_setting"] == 5000
     assert status["manual"]["arm_speed_setting"] == 2000
     assert status["manual"]["max_arm_steps"] == 10000

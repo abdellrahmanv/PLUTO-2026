@@ -101,15 +101,15 @@ class ManualRuntime:
     enabled: bool = False
     speed_intent: int = 0
     steer_intent: int = 0
-    max_speed: int = 150
-    max_steer: int = 80
-    base_speed_setting: int = 150
-    base_steer_setting: int = 80
+    max_speed: int = 400
+    max_steer: int = 400
+    base_speed_setting: int = 100
+    base_steer_setting: int = 100
     arm_step_setting: int = 5000
     arm_speed_setting: int = 2000
     max_arm_steps: int = 10000
     max_arm_speed: int = 3000
-    command_period_ms: int = 150
+    command_period_ms: int = 75
     last_command_at: float | None = None
     last_release_at: float | None = None
     last_arm_command: dict[str, Any] = field(default_factory=dict)
@@ -632,10 +632,15 @@ class PlutoWebContext:
         self.manual.blocked_reason = None
 
         started = time.monotonic()
-        serial_result = self.stm32_link.send_drive(clamped_speed, clamped_steer)
+        wait_ack = clamped_speed == 0 and clamped_steer == 0
+        serial_result = self.stm32_link.send_drive(clamped_speed, clamped_steer, wait_ack=wait_ack)
         elapsed_ms = (time.monotonic() - started) * 1000.0
         self.manual.speed_intent = clamped_speed
         self.manual.steer_intent = clamped_steer
+        if clamped_speed != 0:
+            self.manual.base_speed_setting = abs(clamped_speed)
+        if clamped_steer != 0:
+            self.manual.base_steer_setting = abs(clamped_steer)
         self.manual.last_command_at = time.time()
         self.manual.command_count += 1
         self.manual.last_result = serial_result
@@ -2661,13 +2666,13 @@ def html_page() -> str:
         <div class="manual-controls">
           <div class="manual-control-row">
             <label for="manualBaseSpeed">Base speed</label>
-            <input id="manualBaseSpeed" type="range" min="0" max="150" step="1" value="150">
-            <span id="manualBaseSpeedValue">150</span>
+            <input id="manualBaseSpeed" type="range" min="50" max="400" step="50" value="100">
+            <span id="manualBaseSpeedValue">100</span>
           </div>
           <div class="manual-control-row">
             <label for="manualBaseSteer">Base steer</label>
-            <input id="manualBaseSteer" type="range" min="0" max="80" step="1" value="80">
-            <span id="manualBaseSteerValue">80</span>
+            <input id="manualBaseSteer" type="range" min="50" max="400" step="50" value="100">
+            <span id="manualBaseSteerValue">100</span>
           </div>
         </div>
         <div class="manual-pad" id="manualPad">
@@ -3743,10 +3748,10 @@ def html_page() -> str:
       document.getElementById('manualBlocked').textContent = manual.blocked_reason || 'none';
       const baseSpeed = document.getElementById('manualBaseSpeed');
       const baseSteer = document.getElementById('manualBaseSteer');
-      baseSpeed.max = manual.max_speed || 150;
-      baseSteer.max = manual.max_steer || 80;
-      if (document.activeElement !== baseSpeed) baseSpeed.value = manual.base_speed_setting || manual.max_speed || 150;
-      if (document.activeElement !== baseSteer) baseSteer.value = manual.base_steer_setting || manual.max_steer || 80;
+      baseSpeed.max = manual.max_speed || 400;
+      baseSteer.max = manual.max_steer || 400;
+      if (document.activeElement !== baseSpeed) baseSpeed.value = manual.base_speed_setting || 100;
+      if (document.activeElement !== baseSteer) baseSteer.value = manual.base_steer_setting || 100;
       document.getElementById('manualBaseSpeedValue').textContent = baseSpeed.value;
       document.getElementById('manualBaseSteerValue').textContent = baseSteer.value;
       const armSteps = document.getElementById('manualArmSteps');
@@ -3903,23 +3908,23 @@ def html_page() -> str:
       document.getElementById('manualBaseSteerValue').textContent = document.getElementById('manualBaseSteer').value;
     }}
     function manualMotionIntent(motion) {{
-      const speedMax = Number(document.getElementById('manualBaseSpeed').max || 150);
-      const steerMax = Number(document.getElementById('manualBaseSteer').max || 80);
-      const speed = numericInput('manualBaseSpeed', 150, 0, speedMax);
-      const steer = numericInput('manualBaseSteer', 80, 0, steerMax);
-      if (motion === 'forward') return {{speed, steer: 0}};
-      if (motion === 'back') return {{speed: -speed, steer: 0}};
+      const speedMax = Number(document.getElementById('manualBaseSpeed').max || 400);
+      const steerMax = Number(document.getElementById('manualBaseSteer').max || 400);
+      const speed = numericInput('manualBaseSpeed', 100, 50, speedMax);
+      const steer = numericInput('manualBaseSteer', 100, 50, steerMax);
+      if (motion === 'forward') return {{speed: -speed, steer: 0}};
+      if (motion === 'back') return {{speed, steer: 0}};
       if (motion === 'left') return {{speed: 0, steer: -steer}};
       if (motion === 'right') return {{speed: 0, steer}};
       return {{speed: 0, steer: 0}};
     }}
-    async function manualDrive(speed, steer) {{
+    async function manualDrive(speed, steer, refreshAfter = true) {{
       await api('/api/manual/drive', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{speed, steer}})
       }});
-      await refresh();
+      if (refreshAfter) await refresh();
     }}
     async function manualArm(arm, direction) {{
       const maxSteps = Number(document.getElementById('manualArmSteps').max || 10000);
@@ -3948,11 +3953,11 @@ def html_page() -> str:
         event.preventDefault();
         const {{speed, steer}} = manualMotionIntent(btn.dataset.motion);
         if (manualTimer) clearInterval(manualTimer);
-        await manualDrive(speed, steer);
+        manualDrive(speed, steer, false).catch(console.error);
         manualTimer = setInterval(() => {{
           const intent = manualMotionIntent(btn.dataset.motion);
-          manualDrive(intent.speed, intent.steer).catch(console.error);
-        }}, 150);
+          manualDrive(intent.speed, intent.steer, false).catch(console.error);
+        }}, 75);
       }};
       btn.addEventListener('mousedown', start);
       btn.addEventListener('touchstart', start, {{passive: false}});
