@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pluto_runtime.web_shell import HardwareDevice, ManualRuntime, PlutoWebContext
+from pluto_runtime.web_shell import HardwareDevice, ManualRuntime, PlutoWebContext, html_page
 
 
 HOST = "127.0.0.1"
@@ -66,6 +66,12 @@ def validate_manual_ignores_ultrasonic_gate() -> None:
     assert fast["serial"]["detail"] == "sent", fast
     assert context.manual.base_speed_setting == 400
     assert context.manual.base_steer_setting == 400
+
+
+def validate_manual_pad_mapping() -> None:
+    page = html_page()
+    assert "if (motion === 'forward') return {speed, steer: 0}" in page
+    assert "if (motion === 'back') return {speed: -speed, steer: 0}" in page
 
 
 def parse_args() -> argparse.Namespace:
@@ -170,6 +176,7 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
 def main() -> int:
     args = parse_args()
     validate_manual_ignores_ultrasonic_gate()
+    validate_manual_pad_mapping()
     base = f"http://{args.host}:{args.port}"
     proc = None
     if not args.external_server:

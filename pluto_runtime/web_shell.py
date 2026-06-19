@@ -3912,8 +3912,8 @@ def html_page() -> str:
       const steerMax = Number(document.getElementById('manualBaseSteer').max || 400);
       const speed = numericInput('manualBaseSpeed', 100, 50, speedMax);
       const steer = numericInput('manualBaseSteer', 100, 50, steerMax);
-      if (motion === 'forward') return {{speed: -speed, steer: 0}};
-      if (motion === 'back') return {{speed, steer: 0}};
+      if (motion === 'forward') return {{speed, steer: 0}};
+      if (motion === 'back') return {{speed: -speed, steer: 0}};
       if (motion === 'left') return {{speed: 0, steer: -steer}};
       if (motion === 'right') return {{speed: 0, steer}};
       return {{speed: 0, steer: 0}};
