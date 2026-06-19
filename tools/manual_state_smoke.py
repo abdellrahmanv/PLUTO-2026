@@ -7,6 +7,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -93,8 +94,11 @@ def validate_manual_pad_mapping() -> None:
 
 def fake_manual_context(enabled: bool = True) -> PlutoWebContext:
     context = PlutoWebContext.__new__(PlutoWebContext)
+    context.lock = threading.RLock()
     context.mode_manager = FakeModeManager()
     context.manual = ManualRuntime(enabled=enabled)
+    context.manual_thread_running = False
+    context.manual_thread = None
     context.hardware = {
         "stm32": HardwareDevice("STM32 motor safety controller", True, connected=True, port="COM_TEST"),
     }
@@ -126,6 +130,25 @@ def validate_manual_release_returns_neutral() -> None:
     assert context.stm32_link.drive_commands == [(120, -30), (0, 0)]
     assert context.manual.speed_intent == 0
     assert context.manual.steer_intent == 0
+
+
+def validate_manual_backend_repeats_held_motion() -> None:
+    context = fake_manual_context(enabled=True)
+    context.manual.command_period_ms = 25
+    move = PlutoWebContext.manual_drive(context, 120, 0)
+    assert move["accepted"] is True, move
+
+    context.manual_thread_running = True
+    thread = threading.Thread(target=PlutoWebContext._manual_drive_repeat_loop, args=(context,), daemon=True)
+    thread.start()
+    time.sleep(0.095)
+    context.manual_thread_running = False
+    thread.join(timeout=1.0)
+
+    assert context.stm32_link.drive_commands[0] == (120, 0), context.stm32_link.drive_commands
+    assert context.stm32_link.drive_commands.count((120, 0)) >= 3, context.stm32_link.drive_commands
+    assert context.manual.repeat_count >= 2, context.manual.repeat_count
+    assert context.manual.last_repeat_result.get("command") == "CMD:DRIVE:120,0", context.manual.last_repeat_result
 
 
 def parse_args() -> argparse.Namespace:
@@ -232,6 +255,7 @@ def main() -> int:
     validate_manual_entry_sends_neutral()
     validate_manual_ignores_ultrasonic_gate()
     validate_manual_pad_mapping()
+    validate_manual_backend_repeats_held_motion()
     validate_manual_release_returns_neutral()
     base = f"http://{args.host}:{args.port}"
     proc = None

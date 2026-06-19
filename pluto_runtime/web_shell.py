@@ -109,14 +109,18 @@ class ManualRuntime:
     arm_speed_setting: int = 2000
     max_arm_steps: int = 10000
     max_arm_speed: int = 3000
-    command_period_ms: int = 75
+    command_period_ms: int = 40
     last_command_at: float | None = None
+    last_intent_at: float | None = None
+    last_repeat_at: float | None = None
     last_release_at: float | None = None
     last_neutral_at: float | None = None
     last_neutral_result: dict[str, Any] = field(default_factory=dict)
+    last_repeat_result: dict[str, Any] = field(default_factory=dict)
     last_arm_command: dict[str, Any] = field(default_factory=dict)
     last_result: dict[str, Any] = field(default_factory=dict)
     command_count: int = 0
+    repeat_count: int = 0
     blocked_reason: str | None = None
 
 
@@ -171,6 +175,8 @@ class PlutoWebContext:
         self.wave.thresholds = self.wave_detector.thresholds()
         self.wave_thread_running = True
         self.wave_thread: threading.Thread | None = None
+        self.manual_thread_running = True
+        self.manual_thread: threading.Thread | None = None
         self.approach_planner = WelcomeApproachPlanner()
         self.approach_status = ApproachStatus()
         self.approach_last_stop_at = 0.0
@@ -227,6 +233,7 @@ class PlutoWebContext:
             self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
         self.refresh_hardware()
         self.start_wave_monitor()
+        self.start_manual_drive_repeater()
 
     def log(self, level: str, message: str) -> None:
         with self.lock:
@@ -239,10 +246,20 @@ class PlutoWebContext:
         self.wave_thread = threading.Thread(target=self._wave_monitor_loop, name="pluto-wave-monitor", daemon=True)
         self.wave_thread.start()
 
+    def start_manual_drive_repeater(self) -> None:
+        if self.manual_thread and self.manual_thread.is_alive():
+            return
+        self.manual_thread_running = True
+        self.manual_thread = threading.Thread(target=self._manual_drive_repeat_loop, name="pluto-manual-drive", daemon=True)
+        self.manual_thread.start()
+
     def stop(self) -> None:
         self.wave_thread_running = False
         if self.wave_thread and self.wave_thread.is_alive():
             self.wave_thread.join(timeout=1.0)
+        self.manual_thread_running = False
+        if self.manual_thread and self.manual_thread.is_alive():
+            self.manual_thread.join(timeout=1.0)
         self.stop_stm32_link()
         self.audio_runtime.stop_playback(reason="web shell stopping")
         self.camera_service.stop()
@@ -261,6 +278,46 @@ class PlutoWebContext:
                 time.sleep(0.5)
             elapsed = time.monotonic() - started
             time.sleep(max(0.01, period_s - elapsed))
+
+    def _manual_drive_repeat_loop(self) -> None:
+        next_send = time.monotonic()
+        while self.manual_thread_running:
+            period_s = max(0.02, float(self.manual.command_period_ms) / 1000.0)
+            speed = 0
+            steer = 0
+            active = False
+            with self.lock:
+                active = (
+                    self.mode_manager.current_state == "MANUAL"
+                    and self.manual.enabled
+                    and self.stm32_link is not None
+                    and self.hardware["stm32"].connected
+                    and (self.manual.speed_intent != 0 or self.manual.steer_intent != 0)
+                )
+                if active:
+                    speed = self.manual.speed_intent
+                    steer = self.manual.steer_intent
+
+            now = time.monotonic()
+            if not active:
+                next_send = now + period_s
+                time.sleep(0.01)
+                continue
+
+            if now < next_send:
+                time.sleep(min(0.01, next_send - now))
+                continue
+
+            result = self._send_manual_drive_command(speed, steer, wait_ack=False, log_motion=False)
+            with self.lock:
+                self.manual.last_repeat_at = time.time()
+                self.manual.last_repeat_result = result
+                self.manual.repeat_count += 1
+                if not result.get("ok"):
+                    self.manual.blocked_reason = str(result.get("detail") or "manual repeat failed")
+            next_send += period_s
+            if next_send < now - period_s:
+                next_send = now + period_s
 
     def refresh_hardware(self) -> None:
         self.stop_stm32_link()
@@ -625,6 +682,18 @@ class PlutoWebContext:
             return neutral
         return None
 
+    def _send_manual_drive_command(self, speed: int, steer: int, wait_ack: bool = False, log_motion: bool = False) -> dict[str, Any]:
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            return {"ok": False, "detail": "STM32 unavailable", "command": f"CMD:DRIVE:{int(speed)},{int(steer)}"}
+
+        serial_result = self.stm32_link.send_drive(speed, steer, wait_ack=wait_ack)
+        self.manual.last_command_at = time.time()
+        self.manual.command_count += 1
+        self.manual.last_result = serial_result
+        if log_motion and (speed != 0 or steer != 0):
+            self.log("drive", f"MANUAL drive speed={speed} steer={steer} result={serial_result['detail']}")
+        return serial_result
+
     def send_manual_neutral(self, reason: str) -> dict[str, Any]:
         self.manual.speed_intent = 0
         self.manual.steer_intent = 0
@@ -661,19 +730,15 @@ class PlutoWebContext:
 
         started = time.monotonic()
         wait_ack = clamped_speed == 0 and clamped_steer == 0
-        serial_result = self.stm32_link.send_drive(clamped_speed, clamped_steer, wait_ack=wait_ack)
+        serial_result = self._send_manual_drive_command(clamped_speed, clamped_steer, wait_ack=wait_ack, log_motion=True)
         elapsed_ms = (time.monotonic() - started) * 1000.0
         self.manual.speed_intent = clamped_speed
         self.manual.steer_intent = clamped_steer
+        self.manual.last_intent_at = time.time()
         if clamped_speed != 0:
             self.manual.base_speed_setting = abs(clamped_speed)
         if clamped_steer != 0:
             self.manual.base_steer_setting = abs(clamped_steer)
-        self.manual.last_command_at = time.time()
-        self.manual.command_count += 1
-        self.manual.last_result = serial_result
-        if clamped_speed != 0 or clamped_steer != 0:
-            self.log("drive", f"MANUAL drive speed={clamped_speed} steer={clamped_steer} result={serial_result['detail']}")
         return {
             "accepted": bool(serial_result["ok"]),
             "speed": clamped_speed,
@@ -728,6 +793,8 @@ class PlutoWebContext:
 
     def manual_stop(self) -> dict[str, Any]:
         self.manual.last_release_at = time.time()
+        self.manual.speed_intent = 0
+        self.manual.steer_intent = 0
         neutral = self.send_manual_neutral("MANUAL release")
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
         self.manual.last_result = stop
@@ -3984,11 +4051,6 @@ def html_page() -> str:
         if (manualTimer) clearInterval(manualTimer);
         const {{speed, steer}} = manualMotionIntent(manualHoldMotion);
         manualDrive(speed, steer, false).catch(console.error);
-        manualTimer = setInterval(() => {{
-          if (!manualHoldMotion) return;
-          const intent = manualMotionIntent(manualHoldMotion);
-          manualDrive(intent.speed, intent.steer, false).catch(console.error);
-        }}, 75);
       }};
       btn.addEventListener('pointerdown', start);
       btn.addEventListener('pointerup', event => {{
@@ -4010,7 +4072,7 @@ def html_page() -> str:
     }});
     ['mouseup', 'mouseleave', 'touchend', 'touchcancel', 'pointerup', 'pointercancel'].forEach(name => {{
       document.addEventListener(name, () => {{
-        if (manualTimer) manualStop().catch(console.error);
+        if (manualHoldMotion) manualStop().catch(console.error);
       }});
     }});
     document.getElementById('manualStop').addEventListener('click', async () => {{
