@@ -220,6 +220,17 @@ TESTS: tuple[ValidationTest, ...] = (
         timeout_s=90,
     ),
     ValidationTest(
+        test_id="welcome-interaction-loop",
+        name="WELCOME Interaction Loop Test",
+        category="System Tests",
+        safety_level="software-safe",
+        required_hardware=(),
+        script_args=("tools/welcome_interaction_smoke.py",),
+        button_label="Run Welcome FSM",
+        timeout_s=60,
+        stage="Stage 2",
+    ),
+    ValidationTest(
         test_id="emergency-stop",
         name="Emergency Stop Test",
         category="Safety Tests",

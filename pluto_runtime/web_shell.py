@@ -34,6 +34,7 @@ from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 from .validation_center import ValidationCenter
 from .wave_detection import SimpleWaveDetector
 from .welcome_approach import ApproachStatus, WelcomeApproachPlanner
+from .welcome_interaction import WelcomeInteractionFSM
 from .welcome_talk import TalkResult, WelcomeTalkEngine
 
 
@@ -89,6 +90,7 @@ class PlutoStatus:
     error: dict[str, Any] = field(default_factory=dict)
     manual: dict[str, Any] = field(default_factory=dict)
     wave: dict[str, Any] = field(default_factory=dict)
+    welcome_interaction: dict[str, Any] = field(default_factory=dict)
     welcome_approach: dict[str, Any] = field(default_factory=dict)
     dance: dict[str, Any] = field(default_factory=dict)
     talk: dict[str, Any] = field(default_factory=dict)
@@ -190,6 +192,7 @@ class PlutoWebContext:
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
         self.talk_last_notice = "Enter WELCOME, then ask a short question."
         self.audio_runtime = AudioRuntime(preferred_microphone=microphone_device, preferred_speaker=speaker_device)
+        self.auto_welcome_no_human_since: float | None = None
         self.validation_center = ValidationCenter()
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
@@ -231,6 +234,15 @@ class PlutoWebContext:
             self.log("pass", "Camera service started")
         else:
             self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
+        self.welcome_interaction = WelcomeInteractionFSM(
+            camera_status=lambda: status_to_dict(self.camera_service.get_status()),
+            audio_runtime=self.audio_runtime,
+            talk_engine=self.talk_engine,
+            mode_state=lambda: self.mode_manager.current_state,
+            stop_guard=lambda: self.degraded_stop_guard_if_safe(self.send_stm32_stop_safe(self.hardware["stm32"].port)),
+            log=self.log,
+            on_talk_result=self.record_welcome_talk_result,
+        )
         self.refresh_hardware()
         self.start_wave_monitor()
         self.start_manual_drive_repeater()
@@ -260,6 +272,7 @@ class PlutoWebContext:
         self.manual_thread_running = False
         if self.manual_thread and self.manual_thread.is_alive():
             self.manual_thread.join(timeout=1.0)
+        self.welcome_interaction.stop("web shell stopping")
         self.stop_stm32_link()
         self.audio_runtime.stop_playback(reason="web shell stopping")
         self.camera_service.stop()
@@ -272,6 +285,8 @@ class PlutoWebContext:
                 with self.lock:
                     self.update_wave_detector()
                     self.process_idle_wave_trigger()
+                    self.process_idle_human_trigger()
+                    self.process_welcome_auto_return()
                     self.wave.last_sample_at = time.time()
             except Exception as exc:
                 self.log("warn", f"Wave monitor error: {exc}")
@@ -509,6 +524,17 @@ class PlutoWebContext:
         if result.accepted:
             if result.current_state == "MANUAL" or self.manual.enabled:
                 manual_neutral = self.update_manual_enabled(result.current_state == "MANUAL")
+            if result.current_state == "WELCOME":
+                self.auto_welcome_no_human_since = None
+                self.welcome_interaction.start(
+                    trigger_source="website",
+                    operator_triggered=True,
+                    initial_response="",
+                    auto_return_to_idle=False,
+                    greet_on_human_detection=True,
+                )
+            elif result.previous_state == "WELCOME" and result.current_state != "WELCOME":
+                self.welcome_interaction.stop(f"transitioned to {result.current_state}")
 
         level = "pass" if result.accepted else "warn"
         self.log(level, f"State request {requested_state}: {result.reason}")
@@ -611,6 +637,8 @@ class PlutoWebContext:
         if result.accepted:
             self.wave.trigger_count += 1
             self.wave.last_reason = "wave trigger accepted"
+            self.auto_welcome_no_human_since = None
+            self.welcome_interaction.start(trigger_source=source, operator_triggered=False, auto_return_to_idle=False)
         else:
             self.wave.rejected_count += 1
             self.wave.last_reason = result.reason
@@ -846,6 +874,15 @@ class PlutoWebContext:
         self.log("info", f"Speaker preference set to {device or 'automatic'}")
         return status
 
+    def configure_welcome_interaction(self, values: dict[str, Any]) -> dict[str, Any]:
+        return self.welcome_interaction.configure(values)
+
+    def record_welcome_talk_result(self, talk_result: TalkResult) -> None:
+        with self.lock:
+            self.talk_last_result = talk_result
+            self.talk_history.appendleft(talk_result)
+            self.talk_last_notice = talk_result.response
+
     def audio_speak(self, text: str) -> dict[str, Any]:
         result = self.audio_runtime.speak_async(text)
         self.log("talk" if result.get("ok") else "warn", f"Audio speak: {result.get('detail')}")
@@ -1018,6 +1055,9 @@ class PlutoWebContext:
             self.process_idle_wave_trigger()
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             camera_status = status_to_dict(self.camera_service.get_status())
+            self.process_idle_human_trigger(camera_status)
+            self.process_welcome_auto_return(camera_status)
+            mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             welcome_approach = self.update_welcome_approach(mode_snapshot, camera_status, stm32_runtime)
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             dance = self.update_dance_runtime(mode_snapshot, camera_status, stm32_runtime)
@@ -1037,6 +1077,7 @@ class PlutoWebContext:
                 error=self.error_status(mode_snapshot, stm32_runtime),
                 manual=asdict(self.manual),
                 wave=self.wave_status(),
+                welcome_interaction=self.welcome_interaction.status(),
                 welcome_approach=welcome_approach,
                 dance=dance,
                 talk=self.talk_status(),
@@ -1182,6 +1223,86 @@ class PlutoWebContext:
             self.wave.armed_until = 0.0
             self.wave.armed_source = None
             self.log("pass", "IDLE real wave detected; WELCOME requested")
+
+    def process_idle_human_trigger(self, camera_status: dict[str, Any] | None = None) -> None:
+        if self.mode_manager.current_state != "IDLE":
+            return
+        camera_status = camera_status or status_to_dict(self.camera_service.get_status())
+        if int(camera_status.get("human_count") or 0) <= 0:
+            return
+        detections = [item for item in (camera_status.get("detections") or []) if isinstance(item, dict)]
+        best = max(detections, key=lambda item: float(item.get("confidence") or 0.0), default={})
+        confidence = float(best.get("confidence") or 0.0)
+        if detections and confidence < 0.30:
+            return
+
+        result = self.mode_manager.request_transition(
+            "WELCOME",
+            self.safety_context(operator_request=False, welcome_trigger_confirmed=True),
+            source="camera_human",
+            reason="IDLE human detected",
+        )
+        stop_result: dict[str, Any] | None = None
+        if result.accepted and result.requires_stop:
+            stop_result = self.degraded_stop_guard_if_safe(self.send_stm32_stop_safe(self.hardware["stm32"].port))
+            self.log("stop", f"IDLE human WELCOME stop guard: {stop_result.get('detail')}")
+            if self.hardware["stm32"].connected and not stop_result.get("ok"):
+                transition = self.mode_manager.enter_error("Unable to verify stopped wheels before human WELCOME", source="camera_human")
+                self.log("error", f"IDLE human WELCOME blocked by stop guard: {stop_result.get('detail')}")
+                self.welcome_interaction.stop("human WELCOME stop guard failed")
+                self.auto_welcome_no_human_since = None
+                return
+
+        if result.accepted:
+            self.auto_welcome_no_human_since = None
+            self.welcome_interaction.start(
+                trigger_source="camera_human",
+                operator_triggered=False,
+                initial_response="",
+                auto_return_to_idle=True,
+                greet_on_human_detection=False,
+            )
+            self.log("pass", f"IDLE human detected; WELCOME auto-started at confidence {confidence:.2f}")
+        else:
+            self.log("warn", f"IDLE human WELCOME rejected: {result.reason}")
+
+    def process_welcome_auto_return(self, camera_status: dict[str, Any] | None = None) -> None:
+        if self.mode_manager.current_state != "WELCOME":
+            self.auto_welcome_no_human_since = None
+            return
+        interaction = self.welcome_interaction.status()
+        if not interaction.get("auto_return_to_idle"):
+            self.auto_welcome_no_human_since = None
+            return
+        active_states = {"HUMAN_DETECTED", "ACTIVE_LISTENING", "WAITING_FOR_RESPONSE", "SPEAKING", "POST_TTS_BUFFER"}
+        if interaction.get("current_welcome_state") in active_states:
+            self.auto_welcome_no_human_since = None
+            return
+        camera_status = camera_status or status_to_dict(self.camera_service.get_status())
+        human_present = int(camera_status.get("human_count") or 0) > 0
+        if human_present:
+            self.auto_welcome_no_human_since = None
+            return
+        now = time.monotonic()
+        if self.auto_welcome_no_human_since is None:
+            self.auto_welcome_no_human_since = now
+            return
+        if now - self.auto_welcome_no_human_since < 1.0:
+            return
+
+        stop = self.degraded_stop_guard_if_safe(self.send_stm32_stop_safe(self.hardware["stm32"].port))
+        result = self.mode_manager.request_transition(
+            "IDLE",
+            self.safety_context(operator_request=False),
+            source="welcome_auto_return",
+            reason="auto WELCOME human no longer detected",
+        )
+        if result.accepted:
+            self.welcome_interaction.stop("auto WELCOME returned to IDLE after human left")
+            self.auto_welcome_no_human_since = None
+            self.log("pass", f"Auto WELCOME returned to IDLE; stop guard: {stop.get('detail')}")
+        else:
+            self.log("warn", f"Auto WELCOME return to IDLE rejected: {result.reason}")
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
         in_error = mode_snapshot["current_state"] == "ERROR"
@@ -2833,6 +2954,10 @@ def html_page() -> str:
         <div class="metric"><span class="label">Notice</span><span class="value" id="talkNotice">Enter WELCOME first</span></div>
         <div class="metric"><span class="label">Response</span><span class="value" id="talkResponse">none</span></div>
         <div class="metric"><span class="label">Transcript</span><span class="value" id="talkTranscript">none</span></div>
+        <div class="metric"><span class="label">Interaction FSM</span><span class="value" id="welcomeFsmState">SCANNING</span></div>
+        <div class="metric"><span class="label">Interaction Flags</span><span class="value" id="welcomeFsmFlags">idle</span></div>
+        <div class="metric"><span class="label">Human Target</span><span class="value" id="welcomeFsmHuman">none</span></div>
+        <div class="metric"><span class="label">Last Transition</span><span class="value" id="welcomeFsmReason">not started</span></div>
         <div class="metric"><span class="label">Audio</span><span class="value" id="audioState">not checked</span></div>
         <div class="metric"><span class="label">Mic</span><span class="value" id="audioMic">none</span></div>
         <div class="metric"><span class="label">Speaker</span><span class="value" id="audioSpeaker">none</span></div>
@@ -2848,6 +2973,31 @@ def html_page() -> str:
           <button id="audioUseMic">Use Mic</button>
           <button id="audioAutoMic">Auto Mic</button>
           <button id="audioRefresh">Audio Refresh</button>
+        </div>
+        <div class="talk-row">
+          <input id="audioSpeakerOverride" maxlength="160" placeholder="Speaker override, e.g. plughw:CARD=Headphones,DEV=0">
+          <button id="audioUseSpeaker">Use Speaker</button>
+          <button id="audioAnalogSpeaker">Analog Speaker</button>
+          <button id="audioAutoSpeaker">Auto Speaker</button>
+        </div>
+        <div class="manual-controls">
+          <div class="manual-arm-settings">
+            <label>Post TTS
+              <input id="welcomePostTts" type="number" min="0.1" max="5" step="0.1" value="1.0">
+            </label>
+            <label>Cooldown
+              <input id="welcomeCooldown" type="number" min="0.2" max="10" step="0.1" value="2.0">
+            </label>
+            <label>Listen max
+              <input id="welcomeMaxRecording" type="number" min="0.5" max="8" step="0.5" value="3.0">
+            </label>
+            <label>Speech RMS
+              <input id="welcomeSpeechThreshold" type="number" min="0" max="1" step="0.005" value="0.03">
+            </label>
+          </div>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="welcomeApplyConfig">Apply Welcome Timing</button>
+          </div>
         </div>
       </section>
       <section class="span-6">
@@ -3915,11 +4065,32 @@ def html_page() -> str:
       const transcript = audio.last_transcript || {{}};
       const tts = audio.last_tts || {{}};
       document.getElementById('talkTranscript').textContent = transcript.text || 'none';
+      const welcomeInteraction = data.welcome_interaction || {{}};
+      document.getElementById('welcomeFsmState').textContent =
+        `${{welcomeInteraction.enabled ? 'active' : 'inactive'}} / ${{welcomeInteraction.current_welcome_state || 'SCANNING'}}`;
+      document.getElementById('welcomeFsmFlags').textContent =
+        `human ${{welcomeInteraction.human_detected ? 'yes' : 'no'}} / speech ${{welcomeInteraction.speech_detected ? 'yes' : 'no'}} / transcript ${{welcomeInteraction.transcript_received ? 'yes' : 'no'}} / tts ${{welcomeInteraction.tts_finished ? 'done' : 'idle'}} / cooldown ${{welcomeInteraction.cooldown_active ? 'yes' : 'no'}}`;
+      document.getElementById('welcomeFsmHuman').textContent =
+        `${{welcomeInteraction.human_count || 0}} human(s) / conf ${{Number(welcomeInteraction.human_detection_confidence || 0).toFixed(2)}} / box ${{welcomeInteraction.bounding_box ? welcomeInteraction.bounding_box.join(',') : 'none'}}`;
+      document.getElementById('welcomeFsmReason').textContent = welcomeInteraction.last_reason || 'not started';
+      const welcomeInputs = [
+        ['welcomePostTts', 'post_tts_delay'],
+        ['welcomeCooldown', 'cooldown_duration'],
+        ['welcomeMaxRecording', 'max_recording_time'],
+        ['welcomeSpeechThreshold', 'speech_threshold'],
+      ];
+      welcomeInputs.forEach(([id, key]) => {{
+        const node = document.getElementById(id);
+        if (document.activeElement !== node && welcomeInteraction[key] != null) {{
+          node.value = welcomeInteraction[key];
+        }}
+      }});
       document.getElementById('audioState').textContent =
         `${{audio.microphone_available ? 'mic ok' : 'no mic'}} / ${{audio.speaker_available ? 'speaker ok' : 'no speaker'}}`;
       document.getElementById('audioMic').textContent = audio.selected_microphone || 'none';
       document.getElementById('audioSpeaker').textContent = audio.selected_speaker || 'none';
       document.getElementById('audioMicOverride').placeholder = audio.requested_microphone || 'Mic override, e.g. headset or plughw:CARD=...';
+      document.getElementById('audioSpeakerOverride').placeholder = audio.requested_speaker || 'Speaker override, e.g. plughw:CARD=Headphones,DEV=0';
       document.getElementById('audioEngines').textContent =
         `${{audio.stt_backend || 'stt?'}} / ${{audio.tts_backend || 'tts?'}}${{tts.detail ? ' / ' + tts.detail : ''}}`;
       const camera = data.camera || {{}};
@@ -4154,8 +4325,49 @@ def html_page() -> str:
       document.getElementById('audioMicOverride').value = '';
       await refresh();
     }});
+    document.getElementById('audioUseSpeaker').addEventListener('click', async () => {{
+      const input = document.getElementById('audioSpeakerOverride');
+      await api('/api/audio/select-speaker', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{device: input.value}})
+      }});
+      await refresh();
+    }});
+    document.getElementById('audioAnalogSpeaker').addEventListener('click', async () => {{
+      const input = document.getElementById('audioSpeakerOverride');
+      input.value = 'plughw:CARD=Headphones,DEV=0';
+      await api('/api/audio/select-speaker', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{device: input.value}})
+      }});
+      await refresh();
+    }});
+    document.getElementById('audioAutoSpeaker').addEventListener('click', async () => {{
+      await api('/api/audio/select-speaker', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{device: ''}})
+      }});
+      document.getElementById('audioSpeakerOverride').value = '';
+      await refresh();
+    }});
     document.getElementById('audioRefresh').addEventListener('click', async () => {{
       await api('/api/audio/refresh', {{method: 'POST'}});
+      await refresh();
+    }});
+    document.getElementById('welcomeApplyConfig').addEventListener('click', async () => {{
+      await api('/api/welcome/interaction-config', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{
+          post_tts_delay: Number(document.getElementById('welcomePostTts').value),
+          cooldown_duration: Number(document.getElementById('welcomeCooldown').value),
+          max_recording_time: Number(document.getElementById('welcomeMaxRecording').value),
+          speech_threshold: Number(document.getElementById('welcomeSpeechThreshold').value)
+        }})
+      }});
       await refresh();
     }});
     document.getElementById('talkInput').addEventListener('keydown', async (event) => {{
@@ -4753,6 +4965,10 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     self.context.welcome_listen(float(body.get("duration_s", 3.0)), bool(body.get("speak", False))),
                 )
+                return
+            if path == "/api/welcome/interaction-config":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.configure_welcome_interaction(body))
                 return
             if path == "/api/validation/run":
                 body = self.read_json()

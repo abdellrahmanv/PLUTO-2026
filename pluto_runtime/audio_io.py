@@ -92,7 +92,24 @@ class AudioRuntime:
         self._play_procs: list[subprocess.Popen] = []
         self.probe()
 
+    def ensure_max_volume(self) -> None:
+        amixer = shutil.which("amixer")
+        if not amixer:
+            return
+        for control in ("Master", "PCM", "Headphone", "Speaker"):
+            try:
+                subprocess.run(
+                    [amixer, "-q", "sset", control, "100%", "unmute"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=1.0,
+                    check=False,
+                )
+            except Exception:
+                continue
+
     def probe(self) -> AudioProbe:
+        self.ensure_max_volume()
         tools = {name: shutil.which(name) is not None for name in ("arecord", "aplay", "ffmpeg", "piper")}
         tools["piper_local"] = Path("/home/pi/pluto-v2/piper/piper").exists()
 
@@ -282,6 +299,7 @@ class AudioRuntime:
             self._set_tts(result)
             return result
 
+        self.ensure_max_volume()
         piper_binary, piper_model = discover_piper()
         status = self.probe_status
         device = playback_device or status.selected_speaker
@@ -337,6 +355,7 @@ class AudioRuntime:
             self._set_playback(result)
             return result
 
+        self.ensure_max_volume()
         status = self.probe_status
         device = playback_device or status.selected_speaker
         if not device or not shutil.which("aplay"):

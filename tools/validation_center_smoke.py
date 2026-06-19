@@ -103,6 +103,7 @@ def main() -> int:
         assert "speaker" in by_id
         assert "microphone" in by_id
         assert "stm32-stress" in by_id
+        assert "welcome-interaction-loop" in by_id
         assert "bldc-motor-physical" in by_id
         assert "nema-arm-physical" in by_id
         assert "camera-live" in by_id
