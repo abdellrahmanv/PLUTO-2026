@@ -3897,6 +3897,7 @@ def html_page() -> str:
       await refresh();
     }}));
     let manualTimer = null;
+    let manualHoldMotion = null;
     function numericInput(id, fallback, minValue, maxValue) {{
       const node = document.getElementById(id);
       const raw = Number(node.value);
@@ -3943,31 +3944,44 @@ def html_page() -> str:
         clearInterval(manualTimer);
         manualTimer = null;
       }}
+      manualHoldMotion = null;
       await api('/api/manual/stop', {{method: 'POST'}});
       await refresh();
     }}
     document.getElementById('manualBaseSpeed').addEventListener('input', updateManualLabels);
     document.getElementById('manualBaseSteer').addEventListener('input', updateManualLabels);
     document.querySelectorAll('#manualPad button[data-motion]').forEach(btn => {{
-      const start = async (event) => {{
+      const start = (event) => {{
         event.preventDefault();
-        const {{speed, steer}} = manualMotionIntent(btn.dataset.motion);
+        manualHoldMotion = btn.dataset.motion;
         if (manualTimer) clearInterval(manualTimer);
+        const {{speed, steer}} = manualMotionIntent(manualHoldMotion);
         manualDrive(speed, steer, false).catch(console.error);
         manualTimer = setInterval(() => {{
-          const intent = manualMotionIntent(btn.dataset.motion);
+          if (!manualHoldMotion) return;
+          const intent = manualMotionIntent(manualHoldMotion);
           manualDrive(intent.speed, intent.steer, false).catch(console.error);
         }}, 75);
       }};
-      btn.addEventListener('mousedown', start);
-      btn.addEventListener('touchstart', start, {{passive: false}});
+      btn.addEventListener('pointerdown', start);
+      btn.addEventListener('pointerup', event => {{
+        event.preventDefault();
+        if (manualHoldMotion === btn.dataset.motion) manualStop().catch(console.error);
+      }});
+      btn.addEventListener('pointercancel', event => {{
+        event.preventDefault();
+        if (manualHoldMotion === btn.dataset.motion) manualStop().catch(console.error);
+      }});
+      btn.addEventListener('lostpointercapture', () => {{
+        if (manualHoldMotion === btn.dataset.motion) manualStop().catch(console.error);
+      }});
     }});
     document.querySelectorAll('[data-arm]').forEach(btn => {{
       btn.addEventListener('click', async () => {{
         await manualArm(Number(btn.dataset.arm), Number(btn.dataset.armDir));
       }});
     }});
-    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(name => {{
+    ['mouseup', 'mouseleave', 'touchend', 'touchcancel', 'pointerup', 'pointercancel'].forEach(name => {{
       document.addEventListener(name, () => {{
         if (manualTimer) manualStop().catch(console.error);
       }});

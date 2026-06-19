@@ -895,7 +895,7 @@ void applyMotorSafety(void) {
         sendUSB("ALERT:HOVERBOARD_ERROR\r\n");
     }
 
-    if (cmdSpeed < 0 && obstacleAhead()) {
+    if (cmdSpeed > 0 && obstacleAhead()) {
         cmdSpeed = 0;
         sendUSB("ALERT:OBSTACLE_FRONT\r\n");
     }
