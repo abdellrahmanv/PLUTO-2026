@@ -498,56 +498,62 @@ class Stm32SerialLink:
         return status
 
     def _run(self) -> None:
-        try:
-            import serial  # type: ignore
+        import serial  # type: ignore
 
-            ser = serial.Serial(port=self.port, baudrate=self.baud, timeout=0.02, write_timeout=0.1)
-            with self._lock:
-                self._serial = ser
-                now = time.time()
-                self._status.available = True
-                self._status.running = True
-                self._status.connected_since = now
-                self._status.last_seen = now
-                self._status.error = None
-            self.send_stop(wait_ack=False)
-            next_ping = time.monotonic()
+        while not self._stop_event.is_set():
+            ser = None
+            try:
+                ser = serial.Serial(port=self.port, baudrate=self.baud, timeout=0.02, write_timeout=0.1)
+                with self._lock:
+                    self._serial = ser
+                    now = time.time()
+                    self._status.available = True
+                    self._status.running = True
+                    if self._status.connected_since is None:
+                        self._status.connected_since = now
+                    self._status.last_seen = now
+                    self._status.error = None
+                self.send_stop(wait_ack=False)
+                next_ping = time.monotonic()
 
-            while not self._stop_event.is_set():
-                now_mono = time.monotonic()
-                if now_mono >= next_ping:
-                    self.send_command("CMD:PING")
-                    next_ping = now_mono + self.heartbeat_interval_s
+                while not self._stop_event.is_set():
+                    now_mono = time.monotonic()
+                    if now_mono >= next_ping:
+                        self.send_command("CMD:PING")
+                        next_ping = now_mono + self.heartbeat_interval_s
 
-                try:
-                    raw = ser.readline()
-                except Exception as exc:
-                    with self._lock:
-                        self._status.error = str(exc)
-                        self._status.available = False
-                        self._status.running = False
-                    break
+                    try:
+                        raw = ser.readline()
+                    except Exception as exc:
+                        with self._lock:
+                            self._status.error = str(exc)
+                            self._status.available = False
+                            self._status.running = False
+                        break
 
-                if raw:
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    self._handle_line(line)
-                else:
-                    time.sleep(0.005)
-        except Exception as exc:
-            with self._lock:
-                self._status.error = str(exc)
-                self._status.available = False
-                self._status.running = False
-        finally:
-            with self._lock:
-                ser = self._serial
-                self._serial = None
-                self._status.running = False
-            if ser is not None:
-                try:
-                    ser.close()
-                except Exception:
-                    pass
+                    if raw:
+                        line = raw.decode("utf-8", errors="replace").strip()
+                        self._handle_line(line)
+                    else:
+                        time.sleep(0.005)
+            except Exception as exc:
+                with self._lock:
+                    self._status.error = str(exc)
+                    self._status.available = False
+                    self._status.running = False
+            finally:
+                with self._lock:
+                    if self._serial is ser:
+                        self._serial = None
+                    self._status.running = False
+                if ser is not None:
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+
+            if not self._stop_event.is_set():
+                time.sleep(0.25)
 
     def _handle_line(self, line: str) -> None:
         now_wall = time.time()
