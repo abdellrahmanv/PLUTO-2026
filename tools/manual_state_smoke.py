@@ -29,15 +29,32 @@ BASE = f"http://{HOST}:{PORT}"
 class FakeModeManager:
     current_state = "MANUAL"
 
+    def enter_error(self, reason: str, source: str = "test") -> SimpleNamespace:
+        self.current_state = "ERROR"
+        return SimpleNamespace(reason=reason, source=source)
+
 
 class FakeStm32Link:
     def __init__(self) -> None:
+        self.drive_commands: list[tuple[int, int]] = []
         self.last_drive: tuple[int, int] | None = None
 
-    def send_drive(self, speed: int, steer: int, wait_ack: bool = True) -> dict:
+    def send_drive(self, speed: int, steer: int, wait_ack: bool = True, **_kwargs) -> dict:
+        self.drive_commands.append((speed, steer))
         self.last_drive = (speed, steer)
-        detail = f"ACK:DRIVE {speed},{steer}" if wait_ack else "sent"
-        return {"ok": True, "detail": detail}
+        if not wait_ack:
+            return {
+                "ok": True,
+                "detail": "sent",
+                "command": f"CMD:DRIVE:{speed},{steer}",
+            }
+        return {
+            "ok": True,
+            "detail": f"ACK:DRIVE:{speed},{steer}",
+            "ack_values": {"speed": speed, "steer": steer},
+            "ack_matches_command": True,
+            "command": f"CMD:DRIVE:{speed},{steer}",
+        }
 
     def get_status(self) -> SimpleNamespace:
         return SimpleNamespace(obstacles={"F": 43.0, "FL": 43.0, "FR": 43.0})
@@ -72,6 +89,43 @@ def validate_manual_pad_mapping() -> None:
     page = html_page()
     assert "if (motion === 'forward') return {speed, steer: 0}" in page
     assert "if (motion === 'back') return {speed: -speed, steer: 0}" in page
+
+
+def fake_manual_context(enabled: bool = True) -> PlutoWebContext:
+    context = PlutoWebContext.__new__(PlutoWebContext)
+    context.mode_manager = FakeModeManager()
+    context.manual = ManualRuntime(enabled=enabled)
+    context.hardware = {
+        "stm32": HardwareDevice("STM32 motor safety controller", True, connected=True, port="COM_TEST"),
+    }
+    context.stm32_link = FakeStm32Link()
+    context.log = lambda _level, _message: None
+    context.send_stm32_stop_safe = lambda _port: {"ok": True, "detail": "ACK:STOP"}
+    return context
+
+
+def validate_manual_entry_sends_neutral() -> None:
+    context = fake_manual_context(enabled=False)
+    result = PlutoWebContext.update_manual_enabled(context, True)
+    assert context.manual.enabled is True
+    assert result["ok"] is True, result
+    assert result["command"] == "CMD:DRIVE:0,0", result
+    assert result["ack_values"] == {"speed": 0, "steer": 0}, result
+    assert context.stm32_link.drive_commands == [(0, 0)]
+    assert context.manual.speed_intent == 0
+    assert context.manual.steer_intent == 0
+
+
+def validate_manual_release_returns_neutral() -> None:
+    context = fake_manual_context(enabled=True)
+    move = PlutoWebContext.manual_drive(context, 120, -30)
+    assert move["accepted"] is True, move
+    stop = PlutoWebContext.manual_stop(context)
+    assert stop["accepted"] is True, stop
+    assert stop["neutral"]["command"] == "CMD:DRIVE:0,0", stop
+    assert context.stm32_link.drive_commands == [(120, -30), (0, 0)]
+    assert context.manual.speed_intent == 0
+    assert context.manual.steer_intent == 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,7 +211,7 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
         assert zero_code == 200, zero_code
         zero = json.loads(zero_raw.decode("utf-8"))
         assert zero["accepted"] is True, zero
-        assert zero["serial"]["detail"] == "ACK:DRIVE", zero
+        assert str(zero["serial"]["detail"]).startswith("ACK:DRIVE"), zero
 
         stop_code, stop_raw = request(base, "/api/manual/stop", "POST")
         assert stop_code == 200, stop_code
@@ -175,8 +229,10 @@ def run_checks(base: str, hardware_zero_drive: bool) -> int:
 
 def main() -> int:
     args = parse_args()
+    validate_manual_entry_sends_neutral()
     validate_manual_ignores_ultrasonic_gate()
     validate_manual_pad_mapping()
+    validate_manual_release_returns_neutral()
     base = f"http://{args.host}:{args.port}"
     proc = None
     if not args.external_server:

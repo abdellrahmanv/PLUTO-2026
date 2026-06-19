@@ -797,15 +797,16 @@ void parseCommand(char* cmd) {
         sendUSB("ACK:STOP\r\n");
     }
     else if (strncmp(cmd, "CMD:DRIVE:", 10) == 0) {
-        if (!returning) {
-            char*   p   = cmd + 10;
-            int16_t spd = (int16_t)atoi(p);
-            char*   comma = strchr(p, ',');
-            int16_t str   = comma ? (int16_t)atoi(comma + 1) : 0;
-            cmdSpeed = spd;
-            cmdSteer = str;
-        }
-        sendUSB("ACK:DRIVE\r\n");
+        char*   p   = cmd + 10;
+        int16_t spd = (int16_t)atoi(p);
+        char*   comma = strchr(p, ',');
+        int16_t str   = comma ? (int16_t)atoi(comma + 1) : 0;
+        returning = 0;
+        cmdSpeed = spd;
+        cmdSteer = str;
+        char ack[32];
+        snprintf(ack, sizeof(ack), "ACK:DRIVE:%d,%d\r\n", (int)spd, (int)str);
+        sendUSB(ack);
     }
     else if (strncmp(cmd, "CMD:ARM:", 8) == 0) {
         int32_t  steps = 0;

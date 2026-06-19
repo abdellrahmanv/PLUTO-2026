@@ -301,6 +301,40 @@ def test_existing_acks_still_work() -> None:
     print("  existing_acks PASS")
 
 
+def test_drive_ack_values_parse() -> None:
+    """ACK:DRIVE:<speed>,<steer> must prove STM32 parsed the intended values."""
+    link = Stm32SerialLink("COM_FAKE", baud=115200)
+    link._handle_line("ACK:DRIVE:100,-20")
+    assert link._status.ack_drive_count == 1
+    assert link._status.last_drive_ack == "ACK:DRIVE:100,-20"
+    assert link._status.last_drive_ack_values == {"speed": 100, "steer": -20}
+    print("  drive_ack_values_parse PASS")
+
+
+def test_send_drive_reports_ack_match() -> None:
+    """send_drive should return ACK values when the STM32 echoes them."""
+    link = Stm32SerialLink("COM_FAKE", baud=115200)
+    fake_ser = FakeSerial()
+    link._serial = fake_ser
+    link._status.available = True
+
+    def delayed_ack() -> None:
+        time.sleep(0.02)
+        link._handle_line("ACK:DRIVE:0,0")
+
+    import threading
+
+    thread = threading.Thread(target=delayed_ack)
+    thread.start()
+    result = link.send_drive(0, 0, timeout_s=0.2)
+    thread.join(timeout=1.0)
+    assert result["ok"] is True, result
+    assert result["ack_values"] == {"speed": 0, "steer": 0}, result
+    assert result["ack_matches_command"] is True, result
+    assert fake_ser.written[-1] == b"CMD:DRIVE:0,0\n"
+    print("  send_drive_reports_ack_match PASS")
+
+
 def test_telemetry_and_obs_still_work() -> None:
     """TEL:, OBS:, and IMU: lines must still parse correctly."""
     link = Stm32SerialLink("COM_FAKE", baud=115200)
@@ -371,6 +405,8 @@ def main() -> int:
     test_command_tracking_with_mock()
     test_return_active_lifecycle()
     test_existing_acks_still_work()
+    test_drive_ack_values_parse()
+    test_send_drive_reports_ack_match()
     test_telemetry_and_obs_still_work()
     test_alerts_still_work()
     test_get_status_includes_new_fields()
