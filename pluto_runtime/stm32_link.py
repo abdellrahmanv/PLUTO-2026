@@ -468,6 +468,8 @@ class Stm32SerialLink:
                 elif command == "CMD:STOP":
                     self._status.stop_count += 1
                     self._status.return_active = False
+                    self._status.last_drive_command = None
+                    self._status.last_drive_sent = None
                 elif command.startswith("CMD:DRIVE:"):
                     self._status.drive_count += 1
                     self._status.last_drive_command = command
