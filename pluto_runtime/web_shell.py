@@ -1000,8 +1000,8 @@ class PlutoWebContext:
     def validation_catalog(self) -> dict[str, Any]:
         return self.validation_center.catalog(self.hardware_status_for_validation())
 
-    def run_validation_test(self, test_id: str) -> dict[str, Any]:
-        result = self.validation_center.run(test_id, self.hardware_status_for_validation())
+    def run_validation_test(self, test_id: str, confirmed: bool = False) -> dict[str, Any]:
+        result = self.validation_center.run(test_id, self.hardware_status_for_validation(), context=self, confirmed=confirmed)
         level = "pass" if result.status == "PASS" else ("warn" if result.status == "WARNING" else "error")
         self.log(level, f"Validation {result.name}: {result.status}")
         payload = result.to_dict()
@@ -3075,17 +3075,19 @@ def html_page() -> str:
           ${{tests.map(test => {{
             const missing = validationMissingHardware(test, hardware || {{}});
             const result = validationLastResults[test.id] || test.last_result || null;
-            const status = result ? result.status : (missing.length ? 'WARNING' : 'READY');
+            const status = result ? result.status : (missing.length ? 'HARDWARE NOT DETECTED' : 'READY');
             const statusClass = validationStatusClass(status);
             const disabled = missing.length > 0 || status === 'RUNNING';
             const hardwareText = (test.required_hardware || []).length ? test.required_hardware.join(', ') : 'none';
             const block = missing.length ? ` / missing ${{missing.join(', ')}}` : '';
             const measurements = result && result.measurements ? ` / ${{Object.entries(result.measurements).map(([k, v]) => `${{k}}=${{v}}`).join(' / ')}}` : '';
-            const output = result && result.output ? result.output : (missing.length ? `Required hardware not detected: ${{missing.join(', ')}}` : 'no run yet');
+            const output = result && result.output ? result.output : (missing.length ? `HARDWARE NOT DETECTED: ${{missing.join(', ')}}` : 'no run yet');
+            const confirmation = test.requires_confirmation ? ' / operator confirmation required' : '';
+            const physical = test.physical_motion ? ' / physical motion' : '';
             return `<div class="validation-test" id="validation-${{esc(test.id)}}">
               <div class="validation-name">${{esc(test.name)}}</div>
               <span class="validation-status ${{statusClass}}">${{esc(status)}}</span>
-              <div class="validation-meta">safety=${{esc(test.safety_level)}} / hardware=${{esc(hardwareText)}} / timeout=${{Number(test.timeout_s || 0).toFixed(0)}}s${{esc(block)}}${{esc(measurements)}}</div>
+              <div class="validation-meta">${{esc(test.stage || 'Stage 1')}} / safety=${{esc(test.safety_level)}} / hardware=${{esc(hardwareText)}} / timeout=${{Number(test.timeout_s || 0).toFixed(0)}}s${{esc(confirmation)}}${{esc(physical)}}${{esc(block)}}${{esc(measurements)}}</div>
               <div class="validation-command">${{esc(test.terminal_command)}}</div>
               <button data-validation-id="${{esc(test.id)}}" ${{disabled ? 'disabled' : ''}}>${{esc(test.button_label)}}</button>
               <div class="validation-output">${{esc(output)}}</div>
@@ -3105,6 +3107,10 @@ def html_page() -> str:
     async function runValidationTest(testId) {{
       const test = validationCatalog.find(item => item.id === testId);
       if (!test) return;
+      const confirmed = test.requires_confirmation
+        ? window.confirm(`${{test.name}} can move hardware. Confirm the robot is clear, supervised, and ready.`)
+        : false;
+      if (test.requires_confirmation && !confirmed) return;
       validationLastResults[testId] = {{
         status: 'RUNNING',
         output: `running ${{test.terminal_command}}`,
@@ -3115,7 +3121,7 @@ def html_page() -> str:
         const result = await api('/api/validation/run', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
-          body: JSON.stringify({{test_id: testId}})
+          body: JSON.stringify({{test_id: testId, confirmed}})
         }});
         validationLastResults[testId] = result;
         if (result.catalog && result.catalog.tests) {{
@@ -4750,7 +4756,7 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/validation/run":
                 body = self.read_json()
-                self.send_json(HTTPStatus.OK, self.context.run_validation_test(str(body.get("test_id", ""))))
+                self.send_json(HTTPStatus.OK, self.context.run_validation_test(str(body.get("test_id", "")), bool(body.get("confirmed", False))))
                 return
             if path == "/api/shutdown":
                 body = self.read_json()

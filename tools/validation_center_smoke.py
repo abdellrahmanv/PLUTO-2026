@@ -26,6 +26,9 @@ REQUIRED_FIELDS = {
     "button_label",
     "timeout_s",
     "dry_run_only",
+    "stage",
+    "requires_confirmation",
+    "physical_motion",
     "enabled",
 }
 
@@ -88,8 +91,8 @@ def main() -> int:
         catalog = json.loads(catalog_raw.decode("utf-8"))
         tests = catalog["tests"]
         assert catalog["name"] == "Validation Center"
-        assert catalog["stage"] == "Stage 1"
-        assert len(tests) >= 10, tests
+        assert catalog["stage"] == "Stage 2"
+        assert len(tests) >= 20, tests
 
         by_id = {item["id"]: item for item in tests}
         assert "stm32-communication" in by_id
@@ -99,6 +102,15 @@ def main() -> int:
         assert "dance-dry-run" in by_id
         assert "speaker" in by_id
         assert "microphone" in by_id
+        assert "stm32-stress" in by_id
+        assert "bldc-motor-physical" in by_id
+        assert "nema-arm-physical" in by_id
+        assert "camera-live" in by_id
+        assert "human-detection-live" in by_id
+        assert "ultrasonic-stop-physical" in by_id
+        assert "emergency-stop-physical" in by_id
+        assert "battery-safety" in by_id
+        assert "full-welcome-scenario" in by_id
 
         for item in tests:
             missing = REQUIRED_FIELDS - set(item)
@@ -106,9 +118,12 @@ def main() -> int:
             assert item["terminal_command"].startswith("python tools/"), item
             assert item["button_label"], item
             assert item["timeout_s"] > 0, item
-            if item["category"] == "Motion Tests":
+            if item["dry_run_only"]:
                 assert item["dry_run_only"] is True, item
                 assert item["safety_level"] == "dry-run", item
+            if item["physical_motion"]:
+                assert item["requires_confirmation"] is True, item
+                assert item["safety_level"] == "physical-motion", item
 
         run_code, run_raw = request("/api/validation/run", "POST", {"test_id": "mode-transition"})
         assert run_code == 200, run_code
@@ -122,9 +137,9 @@ def main() -> int:
         stm32_code, stm32_raw = request("/api/validation/run", "POST", {"test_id": "stm32-communication"})
         assert stm32_code == 200, stm32_code
         stm32 = json.loads(stm32_raw.decode("utf-8"))
-        assert stm32["status"] in {"PASS", "FAIL", "WARNING"}, stm32
-        if stm32["status"] == "WARNING":
-            assert "required hardware" in stm32["output"].lower(), stm32
+        assert stm32["status"] in {"PASS", "FAIL", "WARNING", "HARDWARE NOT DETECTED"}, stm32
+        if stm32["status"] in {"WARNING", "HARDWARE NOT DETECTED"}:
+            assert "hardware" in stm32["output"].lower(), stm32
 
         missing_code, _ = request("/api/validation/run", "POST", {"test_id": "does-not-exist"})
         assert missing_code == 404, missing_code
