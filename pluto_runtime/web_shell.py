@@ -112,6 +112,8 @@ class ManualRuntime:
     command_period_ms: int = 75
     last_command_at: float | None = None
     last_release_at: float | None = None
+    last_neutral_at: float | None = None
+    last_neutral_result: dict[str, Any] = field(default_factory=dict)
     last_arm_command: dict[str, Any] = field(default_factory=dict)
     last_result: dict[str, Any] = field(default_factory=dict)
     command_count: int = 0
@@ -446,13 +448,16 @@ class PlutoWebContext:
             stop_result = self.send_stm32_stop_safe(stm32.port)
             self.log("stop", f"Transition stop guard for {requested_state}: {stop_result['detail']}")
 
+        manual_neutral: dict[str, Any] | None = None
         if result.accepted:
-            self.update_manual_enabled(result.current_state == "MANUAL")
+            if result.current_state == "MANUAL" or self.manual.enabled:
+                manual_neutral = self.update_manual_enabled(result.current_state == "MANUAL")
 
         level = "pass" if result.accepted else "warn"
         self.log(level, f"State request {requested_state}: {result.reason}")
         payload = result.to_dict()
         payload["stop_guard"] = stop_result
+        payload["manual_neutral"] = manual_neutral
         return payload
 
     def welcome_wave_trigger(self, source: str = "website_wave_test", diagnostic: bool = False, arm: bool = False) -> dict[str, Any]:
@@ -598,17 +603,40 @@ class PlutoWebContext:
                 return [int(value) for value in detection["bbox"]]
         return None
 
-    def update_manual_enabled(self, enabled: bool) -> None:
+    def update_manual_enabled(self, enabled: bool) -> dict[str, Any] | None:
         self.manual.enabled = enabled
         if enabled:
             self.manual.speed_intent = 0
             self.manual.steer_intent = 0
             self.manual.blocked_reason = None
-            self.manual.last_result = {"ok": True, "detail": "MANUAL enabled with zero intent"}
+            neutral = self.send_manual_neutral("MANUAL entry")
+            self.manual.last_result = neutral
+            if not neutral.get("ok"):
+                self.manual.enabled = False
+                self.manual.blocked_reason = "manual neutral command failed"
+                self.mode_manager.enter_error("MANUAL entry neutral command failed", source="manual_entry")
+            return neutral
         else:
             self.manual.speed_intent = 0
             self.manual.steer_intent = 0
             self.manual.blocked_reason = "manual disabled"
+            neutral = self.send_manual_neutral("MANUAL exit")
+            self.manual.last_result = neutral
+            return neutral
+        return None
+
+    def send_manual_neutral(self, reason: str) -> dict[str, Any]:
+        self.manual.speed_intent = 0
+        self.manual.steer_intent = 0
+        self.manual.last_neutral_at = time.time()
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            result = {"ok": False, "detail": "STM32 unavailable for manual neutral", "reason": reason}
+        else:
+            result = self.stm32_link.send_drive(0, 0, timeout_s=0.45)
+            result["reason"] = reason
+        self.manual.last_neutral_result = result
+        self.log("stop" if result.get("ok") else "error", f"{reason}: neutral drive result {result.get('detail')}")
+        return result
 
     @staticmethod
     def clamp(value: int, limit: int) -> int:
@@ -699,13 +727,12 @@ class PlutoWebContext:
         return result
 
     def manual_stop(self) -> dict[str, Any]:
-        self.manual.speed_intent = 0
-        self.manual.steer_intent = 0
         self.manual.last_release_at = time.time()
+        neutral = self.send_manual_neutral("MANUAL release")
         stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
         self.manual.last_result = stop
-        self.log("stop", f"MANUAL stop result: {stop['detail']}")
-        return {"accepted": bool(stop["ok"]), "speed": 0, "steer": 0, "serial": stop}
+        self.log("stop", f"MANUAL stop result: neutral={neutral.get('detail')} stop={stop['detail']}")
+        return {"accepted": bool(neutral.get("ok") and stop["ok"]), "speed": 0, "steer": 0, "serial": stop, "neutral": neutral}
 
     def audio_status(self) -> dict[str, Any]:
         return self.audio_runtime.status()

@@ -57,6 +57,19 @@ def parse_imu_line(line: str) -> dict[str, float | str]:
     return parse_key_values(line[4:])
 
 
+def parse_drive_ack_line(line: str) -> dict[str, int]:
+    if not line.startswith("ACK:DRIVE:"):
+        return {}
+    payload = line[len("ACK:DRIVE:") :]
+    parts = payload.split(",", 1)
+    if len(parts) != 2:
+        return {}
+    try:
+        return {"speed": int(parts[0].strip()), "steer": int(parts[1].strip())}
+    except ValueError:
+        return {}
+
+
 class IMUCalibrator:
     """Static MPU6050 calibration copied from the visualizer, minus UI output."""
 
@@ -242,6 +255,8 @@ class Stm32RuntimeStatus:
     ack_drive_count: int = 0
     last_drive_command: str | None = None
     last_drive_sent: float | None = None
+    last_drive_ack: str | None = None
+    last_drive_ack_values: dict[str, int] = field(default_factory=dict)
     # --- Phase 1: return / reset_home / arm tracking ---
     return_count: int = 0
     ack_return_count: int = 0
@@ -339,7 +354,13 @@ class Stm32SerialLink:
         while time.monotonic() < deadline:
             with self._lock:
                 if self._status.ack_drive_count > before:
-                    return {"ok": True, "detail": "ACK:DRIVE", "command": command}
+                    ack_values = dict(self._status.last_drive_ack_values)
+                    matched = ack_values.get("speed") == int(speed) and ack_values.get("steer") == int(steer)
+                    payload = {"ok": True, "detail": self._status.last_drive_ack or "ACK:DRIVE", "command": command}
+                    if ack_values and (self._status.last_drive_ack or "").startswith("ACK:DRIVE:"):
+                        payload["ack_values"] = ack_values
+                        payload["ack_matches_command"] = matched
+                    return payload
             time.sleep(0.01)
         return {"ok": False, "detail": "DRIVE sent but ACK:DRIVE not received within 200 ms", "command": command}
 
@@ -574,8 +595,13 @@ class Stm32SerialLink:
                     self._pending_ping_sent = None
             elif line == "ACK:STOP":
                 self._status.ack_stop_count += 1
-            elif line == "ACK:DRIVE":
+            elif line == "ACK:DRIVE" or line.startswith("ACK:DRIVE:"):
                 self._status.ack_drive_count += 1
+                self._status.last_drive_ack = line
+                if line.startswith("ACK:DRIVE:"):
+                    parsed = parse_drive_ack_line(line)
+                    if parsed:
+                        self._status.last_drive_ack_values = parsed
             elif line == "ACK:RETURN":
                 self._status.ack_return_count += 1
             elif line == "ACK:RETURN_COMPLETE":
