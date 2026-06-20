@@ -16,6 +16,50 @@ from typing import Any
 
 WORD_RE = re.compile(r"[a-z0-9']+")
 
+GENERIC_QUESTION_STARTS = (
+    "how many",
+    "what is",
+    "what are",
+    "tell me",
+    "where is",
+    "where are",
+)
+GENERIC_TOKENS = {
+    "a",
+    "an",
+    "are",
+    "can",
+    "do",
+    "does",
+    "have",
+    "how",
+    "is",
+    "many",
+    "me",
+    "of",
+    "please",
+    "tell",
+    "the",
+    "what",
+    "where",
+    "who",
+    "your",
+}
+MSA_INTENT_PREFIX = "msa_"
+MSA_DOMAIN_TOKENS = {
+    "address",
+    "campus",
+    "faculties",
+    "faculty",
+    "hotline",
+    "hours",
+    "labs",
+    "laboratories",
+    "msa",
+    "partners",
+    "university",
+}
+
 
 @dataclass(frozen=True)
 class TalkConfig:
@@ -355,6 +399,20 @@ class WelcomeTalkEngine:
                 reason="input_too_long",
             )
 
+        if is_generic_question_without_safe_match(normalized):
+            return self._result(
+                started,
+                accepted=True,
+                raw=raw,
+                normalized=normalized,
+                input_words=len(words),
+                response=self.config.unknown_response,
+                source="fallback",
+                intent=None,
+                score=0.0,
+                reason="generic_question",
+            )
+
         intent, response, score, source = self._match(normalized, words)
         if intent is None:
             response = self.config.unknown_response
@@ -418,6 +476,8 @@ class WelcomeTalkEngine:
                 ratio = SequenceMatcher(None, normalized, trigger_norm).ratio()
                 overlap = len(input_tokens & trigger_tokens) / max(len(trigger_tokens), 1)
                 score = max(ratio, overlap * 0.9)
+                if not fuzzy_match_allowed(intent, input_tokens, trigger_tokens, source):
+                    continue
                 if score > best[2]:
                     fuzzy_source = "script_fuzzy" if source == "script" else "fuzzy"
                     best = (intent, response, score, fuzzy_source)
@@ -502,6 +562,41 @@ class WelcomeTalkEngine:
 
 def normalize_text(text: str) -> str:
     return " ".join(WORD_RE.findall(text.lower()))
+
+
+def is_generic_question_without_safe_match(normalized: str) -> bool:
+    if not any(normalized.startswith(prefix) for prefix in GENERIC_QUESTION_STARTS):
+        return False
+    tokens = set(normalized.split())
+    if tokens & MSA_DOMAIN_TOKENS:
+        return False
+    direct_safe_phrases = (
+        "your name",
+        "who are you",
+        "who made",
+        "who built",
+        "what can you do",
+        "what do you do",
+        "where are you",
+        "where am i",
+    )
+    if any(phrase in normalized for phrase in direct_safe_phrases):
+        return False
+    return True
+
+
+def meaningful_tokens(tokens: set[str]) -> set[str]:
+    return {token for token in tokens if token not in GENERIC_TOKENS}
+
+
+def fuzzy_match_allowed(intent: str, input_tokens: set[str], trigger_tokens: set[str], source: str) -> bool:
+    input_content = meaningful_tokens(input_tokens)
+    trigger_content = meaningful_tokens(trigger_tokens)
+    if trigger_content and not (input_content & trigger_content):
+        return False
+    if source == "keyword" and intent.startswith(MSA_INTENT_PREFIX):
+        return bool(input_tokens & MSA_DOMAIN_TOKENS)
+    return True
 
 
 def build_alias_map() -> dict[str, set[str]]:

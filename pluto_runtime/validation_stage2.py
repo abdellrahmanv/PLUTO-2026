@@ -33,6 +33,7 @@ class Stage2ValidationRunner:
         table = {
             "stm32-stress": self.stm32_stress,
             "bldc-motor-physical": self.bldc_motor_physical,
+            "hoverboard-feedback": self.hoverboard_feedback,
             "nema-arm-physical": self.nema_arm_physical,
             "camera-live": self.camera_live,
             "human-detection-live": self.human_detection_live,
@@ -89,6 +90,100 @@ class Stage2ValidationRunner:
             measurements,
             None if status == PASS else "COMMUNICATION_FAILURE",
         )
+
+    def hoverboard_feedback(self, _confirmed: bool = False) -> Stage2Result:
+        if not self._stm32_ready():
+            return self._missing("stm32")
+
+        samples: list[dict[str, Any]] = []
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            snapshot = self._stm32_snapshot()
+            telemetry = snapshot.get("telemetry") if isinstance(snapshot.get("telemetry"), dict) else {}
+            if telemetry:
+                samples.append(dict(telemetry))
+            time.sleep(0.1)
+
+        snapshot = self._stm32_snapshot()
+        telemetry = snapshot.get("telemetry") if isinstance(snapshot.get("telemetry"), dict) else {}
+        if telemetry:
+            samples.append(dict(telemetry))
+
+        latest = samples[-1] if samples else {}
+        voltage = self._numeric(latest.get("BAT"))
+        temperature_c = self._numeric(latest.get("TEMP"))
+        speed = self._numeric(latest.get("SPD"))
+        distance_cm = self._numeric(latest.get("DIST"))
+        pose = {
+            "x_cm": self._numeric(latest.get("X")),
+            "y_cm": self._numeric(latest.get("Y")),
+            "heading_deg": self._numeric(latest.get("H")),
+            "home_distance_cm": self._numeric(latest.get("HOME")),
+            "return_active": self._numeric(latest.get("RET")),
+        }
+
+        required_fields = ("BAT", "TEMP", "SPD", "DIST", "X", "Y", "H")
+        available_fields = [key for key in required_fields if self._has_value(latest.get(key))]
+        missing_fields = [key for key in required_fields if not self._has_value(latest.get(key))]
+        raw_rpm_right = latest.get("RPM_R") or latest.get("RPMR") or latest.get("R_RPM")
+        raw_rpm_left = latest.get("RPM_L") or latest.get("RPML") or latest.get("L_RPM")
+        raw_rpm_available = raw_rpm_right is not None and raw_rpm_left is not None
+
+        measurements = {
+            "voltage_v": voltage,
+            "temperature_c": temperature_c,
+            "speed_feedback": speed,
+            "distance_cm": distance_cm,
+            "pose": pose,
+            "raw_rpm_right": raw_rpm_right,
+            "raw_rpm_left": raw_rpm_left,
+            "raw_rpm_available": raw_rpm_available,
+            "available_fields": available_fields,
+            "missing_fields": missing_fields,
+            "sample_count": len(samples),
+            "latest_telemetry": latest,
+            "stm32": snapshot,
+        }
+
+        lines = [
+            "Hoverboard feedback is read through STM32 TEL telemetry.",
+            f"Voltage: {self._fmt(voltage, 'V')}",
+            f"Temperature: {self._fmt(temperature_c, 'C')}",
+            f"Hall-derived speed feedback: {self._fmt(speed, '')}",
+            f"Hall-derived distance: {self._fmt(distance_cm, 'cm')}",
+            "Pose: "
+            f"X={self._fmt(pose['x_cm'], 'cm')} "
+            f"Y={self._fmt(pose['y_cm'], 'cm')} "
+            f"H={self._fmt(pose['heading_deg'], 'deg')}",
+        ]
+        if raw_rpm_available:
+            lines.append(f"Raw wheel RPM: right={raw_rpm_right}, left={raw_rpm_left}")
+        else:
+            lines.append("Raw wheel RPM: not exposed by current STM32 TEL payload; using derived SPD/DIST/pose feedback.")
+
+        if not latest:
+            return Stage2Result(
+                WARNING,
+                "\n".join(lines + ["No TEL telemetry samples were received during the feedback window."]),
+                measurements,
+                "COMMUNICATION_FAILURE",
+            )
+        if voltage is None or temperature_c is None:
+            missing_text = ", ".join(missing_fields) if missing_fields else "non-numeric telemetry values"
+            return Stage2Result(
+                WARNING,
+                "\n".join(lines + [f"Missing required hoverboard feedback fields: {missing_text}"]),
+                measurements,
+                "COMMUNICATION_FAILURE",
+            )
+        if voltage > 1.0 and voltage < 34.0:
+            return Stage2Result(
+                FAIL,
+                "\n".join(lines + [f"Battery voltage is below safety threshold: {voltage:.1f} V"]),
+                measurements,
+                "SAFETY_GATE_FAILURE",
+            )
+        return Stage2Result(PASS, "\n".join(lines), measurements)
 
     def bldc_motor_physical(self, confirmed: bool = False) -> Stage2Result:
         if not confirmed:
@@ -364,3 +459,25 @@ class Stage2ValidationRunner:
                 except ValueError:
                     return None
         return None
+
+    @staticmethod
+    def _numeric(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        return value is not None and not (isinstance(value, str) and not value.strip())
+
+    @staticmethod
+    def _fmt(value: float | None, unit: str) -> str:
+        if value is None:
+            return "not available"
+        suffix = f" {unit}" if unit else ""
+        return f"{value:.1f}{suffix}"

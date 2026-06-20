@@ -94,6 +94,12 @@ def run_engine_checks() -> None:
     assert creator.response == "Abdelrahman and Hamza built me."
     assert_word_limited(creator.response)
 
+    creator_plain = engine.answer("Who made you?")
+    assert creator_plain.accepted is True
+    assert creator_plain.intent == "creator"
+    assert creator_plain.response == "Abdelrahman and Hamza built me."
+    assert_word_limited(creator_plain.response)
+
     weather = engine.answer("weather")
     assert weather.accepted is True
     assert weather.intent == "weather"
@@ -154,6 +160,36 @@ def run_engine_checks() -> None:
     assert msa_hotline.intent == "msa_hotline"
     assert msa_hotline.response == "MSA hotline is 16672."
     assert_word_limited(msa_hotline.response)
+
+    generic_people = engine.answer("How many people?")
+    assert generic_people.accepted is True
+    assert generic_people.response_source == "fallback"
+    assert generic_people.response == "Ask me something simpler please."
+    assert generic_people.intent is None
+
+    generic_food = engine.answer("What is your favorite food?")
+    assert generic_food.accepted is True
+    assert generic_food.response_source == "fallback"
+    assert generic_food.response == "Ask me something simpler please."
+    assert generic_food.intent is None
+
+    generic_tell = engine.answer("Tell me something")
+    assert generic_tell.accepted is True
+    assert generic_tell.response_source == "fallback"
+    assert generic_tell.response == "Ask me something simpler please."
+    assert generic_tell.intent is None
+
+    generic_where = engine.answer("Where are we going?")
+    assert generic_where.accepted is True
+    assert generic_where.response_source == "fallback"
+    assert generic_where.response == "Ask me something simpler please."
+    assert generic_where.intent is None
+
+    msa_labs = engine.answer("How many labs does MSA have?")
+    assert msa_labs.accepted is True
+    assert msa_labs.intent == "msa_labs"
+    assert msa_labs.response == "MSA has ninety-three scientific laboratories."
+    assert_word_limited(msa_labs.response)
 
     fuzzy = engine.answer("who ar you")
     assert fuzzy.accepted is True

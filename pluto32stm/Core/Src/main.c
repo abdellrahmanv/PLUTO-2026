@@ -344,6 +344,8 @@ void     readRPi(void);
 void     parseCommand(char* cmd);
 uint8_t  parseArmPayload(const char* payload, int32_t* steps, uint32_t* speed_sps);
 void     sendTelemetry(void);
+int32_t  roundFloatToInt(float value);
+void     formatFixed1(char* out, size_t outSize, float value);
 
 // Safety / navigation
 void     applyMotorSafety(void);
@@ -849,26 +851,56 @@ void parseCommand(char* cmd) {
 /* ============================================================================
  * TELEMETRY
  * ============================================================================ */
+int32_t roundFloatToInt(float value) {
+    return (int32_t)(value >= 0.0f ? value + 0.5f : value - 0.5f);
+}
+
+void formatFixed1(char* out, size_t outSize, float value) {
+    int32_t scaled = roundFloatToInt(value * 10.0f);
+    int32_t whole = scaled / 10;
+    int32_t frac = scaled % 10;
+    if (frac < 0) frac = -frac;
+    snprintf(out, outSize, "%ld.%ld", (long)whole, (long)frac);
+}
+
 void sendTelemetry(void) {
     char buf[192];
+    char batText[16];
+    char speedText[16];
+    char tempText[16];
+    char xText[16];
+    char yText[16];
+    char headingText[16];
+    char homeText[16];
     float headingDeg = heading * 57.29578f;
     while (headingDeg >  180.0f) headingDeg -= 360.0f;
     while (headingDeg < -180.0f) headingDeg += 360.0f;
 
+    formatFixed1(batText, sizeof(batText), batV);
+    formatFixed1(speedText, sizeof(speedText), fabsf((float)cmdSpeed) * 0.036f);
+    formatFixed1(tempText, sizeof(tempText), tmpC);
+    formatFixed1(xText, sizeof(xText), posX);
+    formatFixed1(yText, sizeof(yText), posY);
+    formatFixed1(headingText, sizeof(headingText), headingDeg);
+    formatFixed1(homeText, sizeof(homeText), distanceToHome());
+
     snprintf(buf, sizeof(buf),
-        "TEL:BAT:%.1f,SPD:%.1f,DIST:%.0f,TEMP:%.1f,X:%.1f,Y:%.1f,H:%.1f,HOME:%.1f,RET:%u\r\n",
-        batV, fabsf((float)cmdSpeed) * 0.036f, distCm, tmpC,
-        posX, posY, headingDeg, distanceToHome(), returning);
+        "TEL:BAT:%s,SPD:%s,DIST:%ld,TEMP:%s,X:%s,Y:%s,H:%s,HOME:%s,RET:%u\r\n",
+        batText, speedText, (long)roundFloatToInt(distCm), tempText,
+        xText, yText, headingText, homeText, returning);
     sendUSB(buf);
 
     snprintf(buf, sizeof(buf),
-        "OBS:FL:%.0f,F:%.0f,FR:%.0f\r\n",
-        sonar[0].distCm, sonar[1].distCm, sonar[2].distCm);
+        "OBS:FL:%ld,F:%ld,FR:%ld\r\n",
+        (long)roundFloatToInt(sonar[0].distCm),
+        (long)roundFloatToInt(sonar[1].distCm),
+        (long)roundFloatToInt(sonar[2].distCm));
     sendUSB(buf);
 
+    formatFixed1(tempText, sizeof(tempText), imuTempC);
     snprintf(buf, sizeof(buf),
-        "IMU:OK:%u,ADDR:0x%02X,WHO:0x%02X,AX:%d,AY:%d,AZ:%d,GX:%d,GY:%d,GZ:%d,TEMP:%.1f\r\n",
-        imuPresent, imuAddr, imuWhoAmI, imuAx, imuAy, imuAz, imuGx, imuGy, imuGz, imuTempC);
+        "IMU:OK:%u,ADDR:0x%02X,WHO:0x%02X,AX:%d,AY:%d,AZ:%d,GX:%d,GY:%d,GZ:%d,TEMP:%s\r\n",
+        imuPresent, imuAddr, imuWhoAmI, imuAx, imuAy, imuAz, imuGx, imuGy, imuGz, tempText);
     sendUSB(buf);
 }
 

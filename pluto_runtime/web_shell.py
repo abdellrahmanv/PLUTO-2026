@@ -20,6 +20,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -237,6 +238,7 @@ class PlutoWebContext:
             self.log("pass", "Camera service started")
         else:
             self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
+        self.camera_perception_mode = "NORMAL"
         self.welcome_interaction = WelcomeInteractionFSM(
             camera_status=lambda: status_to_dict(self.camera_service.get_status()),
             audio_runtime=self.audio_runtime,
@@ -600,6 +602,7 @@ class PlutoWebContext:
         if result.accepted:
             if result.current_state == "MANUAL" or self.manual.enabled:
                 manual_neutral = self.update_manual_enabled(result.current_state == "MANUAL")
+            self.update_perception_workload(result.current_state)
             if result.current_state == "WELCOME":
                 self.auto_welcome_no_human_since = None
                 self.welcome_interaction.start(
@@ -714,6 +717,7 @@ class PlutoWebContext:
             self.wave.trigger_count += 1
             self.wave.last_reason = "wave trigger accepted"
             self.auto_welcome_no_human_since = None
+            self.update_perception_workload("WELCOME")
             self.welcome_interaction.start(trigger_source=source, operator_triggered=False, auto_return_to_idle=False)
         else:
             self.wave.rejected_count += 1
@@ -938,6 +942,19 @@ class PlutoWebContext:
             self.log("info", "Audio hardware refreshed")
         return status.to_dict()
 
+    def update_perception_workload(self, current_state: str | None = None) -> None:
+        state = str(current_state or self.mode_manager.current_state).upper()
+        target = "REDUCED" if state == "WELCOME" else "NORMAL"
+        if self.camera_service.set_perception_mode(target):
+            previous = self.camera_perception_mode
+            self.camera_perception_mode = target
+            detail = (
+                "WELCOME active: human detection reduced, wave/pose processing disabled"
+                if target == "REDUCED"
+                else "WELCOME inactive: normal perception restored"
+            )
+            self.log("info", f"Perception workload {previous} -> {target}: {detail}")
+
     def select_microphone(self, device: str | None) -> dict[str, Any]:
         status = self.audio_runtime.set_microphone(device)
         self.refresh_audio()
@@ -954,10 +971,25 @@ class PlutoWebContext:
         return self.welcome_interaction.configure(values)
 
     def record_welcome_talk_result(self, talk_result: TalkResult) -> None:
+        started = time.monotonic()
+        self.log(
+            "talk",
+            "WELCOME TRACE web_shell.on_talk_result start / "
+            f"timestamp={datetime.now().isoformat(timespec='milliseconds')} / "
+            f"intent={talk_result.intent!r} / reason={talk_result.reason!r} / "
+            f"latency_ms={talk_result.latency_ms!r}",
+        )
         with self.lock:
             self.talk_last_result = talk_result
             self.talk_history.appendleft(talk_result)
             self.talk_last_notice = talk_result.response
+        self.log(
+            "talk",
+            "WELCOME TRACE web_shell.on_talk_result end / "
+            f"timestamp={datetime.now().isoformat(timespec='milliseconds')} / "
+            f"callback_latency_ms={(time.monotonic() - started) * 1000.0:.3f} / "
+            f"intent={talk_result.intent!r} / reason={talk_result.reason!r}",
+        )
 
     def audio_speak(self, text: str) -> dict[str, Any]:
         result = self.audio_runtime.speak_async(text)
@@ -1128,6 +1160,7 @@ class PlutoWebContext:
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
             self.escalate_critical_alert_if_needed(stm32_runtime)
+            self.update_perception_workload(mode_snapshot["current_state"])
             self.process_idle_wave_trigger()
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             camera_status = status_to_dict(self.camera_service.get_status())
@@ -1331,6 +1364,7 @@ class PlutoWebContext:
 
         if result.accepted:
             self.auto_welcome_no_human_since = None
+            self.update_perception_workload("WELCOME")
             self.welcome_interaction.start(
                 trigger_source="camera_human",
                 operator_triggered=False,
@@ -2201,6 +2235,7 @@ def html_page() -> str:
       min-height: 180px;
       max-height: 320px;
       overflow: auto;
+      overscroll-behavior: contain;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel-soft);
@@ -3038,6 +3073,7 @@ def html_page() -> str:
         <div class="metric"><span class="label">Mic</span><span class="value" id="audioMic">none</span></div>
         <div class="metric"><span class="label">Speaker</span><span class="value" id="audioSpeaker">none</span></div>
         <div class="metric"><span class="label">Speech IO</span><span class="value" id="audioEngines">none</span></div>
+        <div class="metric"><span class="label">Whisper STT</span><span class="value" id="audioWhisper">none</span></div>
         <div class="talk-row">
           <input id="talkInput" maxlength="120" placeholder="Ask Pluto a short question">
           <button class="primary" id="talkAsk">Ask</button>
@@ -3114,6 +3150,10 @@ def html_page() -> str:
     const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     let validationCatalog = [];
     let validationLastResults = {{}};
+    const eventLogScroll = {{
+      followLatest: true,
+      threshold: 16
+    }};
     function getStoredTheme() {{
       try {{
         return localStorage.getItem(THEME_KEY) || 'auto';
@@ -3370,6 +3410,27 @@ def html_page() -> str:
       document.getElementById('eventWarnings').textContent = warningCount;
       document.getElementById('eventFaults').textContent = faultCount;
       document.getElementById('eventDepth').textContent = events.length;
+    }}
+    function renderMissionLog(events) {{
+      const root = document.getElementById('events');
+      const previousScrollTop = root.scrollTop;
+      const previousScrollHeight = root.scrollHeight;
+      const nearLatest = previousScrollTop <= eventLogScroll.threshold;
+      eventLogScroll.followLatest = eventLogScroll.followLatest && nearLatest;
+
+      root.innerHTML = events.map(item => {{
+        const t = new Date(item.timestamp * 1000).toLocaleTimeString();
+        return `<div class="event ${{cleanClass(item.level)}}"><span>${{t}}</span><span>${{esc(item.level)}}</span><span>${{esc(item.message)}}</span></div>`;
+      }}).join('');
+
+      if (eventLogScroll.followLatest || nearLatest) {{
+        root.scrollTop = 0;
+        eventLogScroll.followLatest = true;
+        return;
+      }}
+
+      const heightDelta = root.scrollHeight - previousScrollHeight;
+      root.scrollTop = Math.max(0, previousScrollTop + heightDelta);
     }}
     function renderLaunchGate(checks) {{
       const bad = checks.filter(item => item.level === 'bad').length;
@@ -3841,10 +3902,7 @@ def html_page() -> str:
           <span class="value ${{item.allowed ? 'status-good' : 'status-warn'}}">${{item.reason}}</span>
         </div>
       `).join('');
-      document.getElementById('events').innerHTML = data.events.map(item => {{
-        const t = new Date(item.timestamp * 1000).toLocaleTimeString();
-        return `<div class="event ${{cleanClass(item.level)}}"><span>${{t}}</span><span>${{esc(item.level)}}</span><span>${{esc(item.message)}}</span></div>`;
-      }}).join('');
+      renderMissionLog(data.events || []);
       renderEventSummary(data.events || []);
       document.getElementById('report').textContent = JSON.stringify(data.bootstrap_report, null, 2);
       const obstacles = stm.obstacles || {{}};
@@ -4169,6 +4227,8 @@ def html_page() -> str:
       document.getElementById('audioSpeakerOverride').placeholder = audio.requested_speaker || 'Speaker override, e.g. plughw:CARD=Headphones,DEV=0';
       document.getElementById('audioEngines').textContent =
         `${{audio.stt_backend || 'stt?'}} / ${{audio.tts_backend || 'tts?'}}${{tts.detail ? ' / ' + tts.detail : ''}}`;
+      document.getElementById('audioWhisper').textContent =
+        `${{audio.stt_backend || 'stt?'}} / ${{audio.stt_model_type || 'model?'}} / ${{audio.stt_device || 'device?'}}/${{audio.stt_compute_type || 'compute?'}}/${{audio.stt_cpu_threads || '?'}}t / last ${{transcript.elapsed_ms == null ? 'none' : Number(transcript.elapsed_ms).toFixed(0) + ' ms'}} / avg ${{audio.stt_average_ms == null ? 'none' : Number(audio.stt_average_ms).toFixed(0) + ' ms'}} / max ${{audio.stt_max_ms == null ? 'none' : Number(audio.stt_max_ms).toFixed(0) + ' ms'}} / rms ${{((transcript.signal || {{}}).rms == null ? 'none' : Number((transcript.signal || {{}}).rms).toFixed(4))}} / peak ${{((transcript.signal || {{}}).peak == null ? 'none' : Number((transcript.signal || {{}}).peak).toFixed(4))}} / ${{audio.stt_detail || 'model unknown'}}`;
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');
@@ -4182,7 +4242,7 @@ def html_page() -> str:
         unavailable.style.display = 'grid';
         unavailable.textContent = camera.error || 'Camera feed unavailable';
       }}
-      document.getElementById('cameraStatus').textContent = camera.running ? `${{camera.backend}} ${{camera.resolution}}` : (camera.error || 'unavailable');
+      document.getElementById('cameraStatus').textContent = camera.running ? `${{camera.backend}} ${{camera.resolution}} / perception ${{camera.perception_mode || 'NORMAL'}}` : (camera.error || 'unavailable');
       document.getElementById('humanCount').textContent = camera.human_count || 0;
       document.getElementById('cameraFps').textContent = `${{(camera.stream_fps || 0).toFixed(1)}} stream / ${{(camera.capture_fps || 0).toFixed(1)}} capture`;
       document.getElementById('cameraInference').textContent = `${{(camera.inference_ms || 0).toFixed(1)}} ms`;
@@ -4457,6 +4517,9 @@ def html_page() -> str:
       if (!button || button.disabled) return;
       await runValidationTest(button.dataset.validationId);
     }});
+    document.getElementById('events').addEventListener('scroll', event => {{
+      eventLogScroll.followLatest = event.currentTarget.scrollTop <= eventLogScroll.threshold;
+    }}, {{passive: true}});
     loadValidationCatalog()
       .then(() => renderValidationCatalog(validationCatalog, window.lastPlutoHardware || {{}}))
       .catch(console.error);

@@ -34,6 +34,7 @@ class WelcomeInteractionConfig:
     silence_duration: float = 1.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
+    human_detection_grace_duration: float = 1.5
     speech_threshold: float = 0.03
     scan_period: float = 0.15
     intro_text: str = "Welcome. I am Pluto, a graduation project robot."
@@ -46,6 +47,7 @@ class WelcomeInteractionConfig:
             "silence_duration": (0.2, 5.0),
             "min_speech_duration": (0.0, 3.0),
             "queue_flush_duration": (0.0, 2.0),
+            "human_detection_grace_duration": (0.0, 5.0),
             "speech_threshold": (0.0, 1.0),
             "scan_period": (0.05, 2.0),
         }
@@ -83,6 +85,7 @@ class WelcomeInteractionStatus:
     max_recording_time: float = 3.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
+    human_detection_grace_duration: float = 1.5
     human_detection_confidence: float = 0.0
     human_count: int = 0
     bounding_box: list[int] | None = None
@@ -137,6 +140,7 @@ class WelcomeInteractionFSM:
         self._greet_on_human_detection = False
         self._intro_text = self.config.intro_text
         self._interaction_started = 0.0
+        self._human_detection_grace_until = 0.0
 
     def start(
         self,
@@ -155,6 +159,7 @@ class WelcomeInteractionFSM:
             self._intro_text = self.config.intro_text
             self._running = True
             self._interaction_started = time.monotonic()
+            self._human_detection_grace_until = 0.0
             transition = self._set_state_locked("SCANNING", "WELCOME interaction armed")
             self._sync_config_locked()
             self._status.enabled = True
@@ -252,6 +257,8 @@ class WelcomeInteractionFSM:
                 self._initial_response = self._intro_text
                 self._status.initial_response_pending = True
         if perception["human_detected"]:
+            if not self._operator_triggered:
+                self._human_detection_grace_until = time.monotonic() + self.config.human_detection_grace_duration
             reason = "human detected; intro pending" if not was_human_detected else "human still detected"
             self._transition("HUMAN_DETECTED", reason)
 
@@ -289,8 +296,14 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._apply_perception_locked(perception)
         if not perception["human_detected"] and not self._operator_triggered:
-            self._transition("SCANNING", "human no longer detected before listening")
-            return
+            if time.monotonic() > self._human_detection_grace_until:
+                self._transition("SCANNING", "human no longer detected before listening")
+                return
+            self._log_trace(
+                "auto human detection grace used",
+                grace_until_monotonic=self._human_detection_grace_until,
+                trigger_source=self._trigger_source,
+            )
         with self._lock:
             self._status.audio_queue = ["microphone"]
             self._status.speech_detected = False
@@ -301,9 +314,37 @@ class WelcomeInteractionFSM:
             self.audio_runtime.min_rms = self.config.speech_threshold
         except Exception:
             pass
-        self._log_trace("audio listen start", max_recording_time_s=self.config.max_recording_time)
+        self._log_trace(
+            "audio listen start",
+            current_welcome_state=self.status().get("current_welcome_state"),
+            max_recording_time_s=self.config.max_recording_time,
+            selected_microphone=(self.audio_runtime.status() or {}).get("selected_microphone"),
+        )
         listen = self.audio_runtime.listen(self.config.max_recording_time)
-        self._log_trace("audio listen end")
+        listen_timing = listen.get("timing") or {}
+        audio_status = self.audio_runtime.status() or {}
+        self._log_trace(
+            "audio listen end",
+            listen_started_at=listen_timing.get("listen_started_at"),
+            listen_ended_at=listen_timing.get("listen_ended_at"),
+            listen_latency_ms=listen_timing.get("listen_latency_ms"),
+            record_started_at=listen_timing.get("record_started_at"),
+            record_ended_at=listen_timing.get("record_ended_at"),
+            record_latency_ms=listen_timing.get("record_latency_ms"),
+            transcribe_started_at=listen_timing.get("transcribe_started_at"),
+            transcribe_ended_at=listen_timing.get("transcribe_ended_at"),
+            transcribe_latency_ms=listen_timing.get("transcribe_latency_ms"),
+            transcribe_wall_latency_ms=listen_timing.get("transcribe_wall_latency_ms"),
+            model_load_ms=listen_timing.get("model_load_ms"),
+            stt_backend=audio_status.get("stt_backend"),
+            stt_model_type=audio_status.get("stt_model_type"),
+            stt_model_path=audio_status.get("stt_detail"),
+            stt_compute_type=audio_status.get("stt_compute_type"),
+            stt_device=audio_status.get("stt_device"),
+            stt_cpu_threads=audio_status.get("stt_cpu_threads"),
+            stt_average_ms=audio_status.get("stt_average_ms"),
+            stt_max_ms=audio_status.get("stt_max_ms"),
+        )
         recording = listen.get("recording") or {}
         transcript = listen.get("transcript") or {}
         signal = recording.get("signal") or transcript.get("signal") or {}
@@ -313,8 +354,12 @@ class WelcomeInteractionFSM:
             "transcript text received",
             transcript_text=text,
             transcript_word_count=len(text.split()) if text else 0,
+            transcript_confidence=transcript.get("confidence"),
+            transcript_segment_count=transcript.get("segment_count"),
             transcript_ok=bool(transcript.get("ok")),
             transcript_detail=transcript.get("detail", ""),
+            audio_rms=rms,
+            audio_peak=signal.get("peak"),
         )
         speech_detected = rms >= self.config.speech_threshold
         perception = self._extract_perception(self.camera_status())
@@ -346,7 +391,10 @@ class WelcomeInteractionFSM:
             intent=getattr(result, "intent", None),
             reason=getattr(result, "reason", ""),
             latency_ms=getattr(result, "latency_ms", None),
+            response_text=getattr(result, "response", ""),
+            response_word_count=getattr(result, "response_words", None),
             response_source=getattr(result, "response_source", ""),
+            score=getattr(result, "score", None),
             fallback_unknown_response_used=fallback_used,
             ollama_llm_fallback_called=False,
             ollama_llm_fallback_enabled=ollama_enabled,
@@ -356,7 +404,15 @@ class WelcomeInteractionFSM:
             self._status.response_text = response
             self._status.audio_status = self.audio_runtime.status()
         if self.on_talk_result is not None:
+            callback_started = time.monotonic()
+            self._log_trace("on_talk_result start", intent=getattr(result, "intent", None), reason=getattr(result, "reason", ""))
             self.on_talk_result(result)
+            self._log_trace(
+                "on_talk_result end",
+                callback_latency_ms=(time.monotonic() - callback_started) * 1000.0,
+                intent=getattr(result, "intent", None),
+                reason=getattr(result, "reason", ""),
+            )
         if not response or not getattr(result, "accepted", False):
             self._transition("COOLDOWN", getattr(result, "reason", "empty response"))
             return
@@ -367,16 +423,35 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._status.audio_queue = ["tts"]
             self._status.tts_finished = False
-        self._log_trace("TTS start", response_text=response, response_word_count=len(str(response).split()) if response else 0)
+        self._log_trace("TTS preparation start", response_text=response, response_word_count=len(str(response).split()) if response else 0)
         result = self.audio_runtime.speak(response)
         self._log_trace(
             "TTS finished",
             tts_ok=bool(result.get("ok")),
             tts_detail=result.get("detail", ""),
             tts_generated=bool(result.get("generated")),
+            tts_cache_hit=result.get("cache_hit"),
+            tts_started_at=result.get("started_at"),
+            tts_prepare_ended_at=result.get("prepare_ended_at"),
+            tts_synthesis_started_at=result.get("synthesis_started_at"),
+            tts_synthesis_ended_at=result.get("synthesis_ended_at"),
+            tts_playback_started_at=result.get("playback_started_at"),
+            tts_playback_ended_at=result.get("playback_ended_at"),
+            tts_ended_at=result.get("ended_at"),
             tts_generate_ms=result.get("generate_ms"),
             tts_play_ms=result.get("play_ms"),
+            total_tts_latency_ms=result.get("total_latency_ms"),
+            selected_speaker=result.get("device"),
         )
+        if result.get("playback_started_at"):
+            self._log_trace("TTS playback start", playback_started_at=result.get("playback_started_at"))
+        if result.get("playback_ended_at"):
+            self._log_trace(
+                "TTS playback end",
+                playback_started_at=result.get("playback_started_at"),
+                playback_ended_at=result.get("playback_ended_at"),
+                playback_latency_ms=result.get("play_ms"),
+            )
         with self._lock:
             self._status.audio_status = self.audio_runtime.status()
             self._status.audio_queue = []
@@ -422,6 +497,7 @@ class WelcomeInteractionFSM:
         if previous != next_state:
             item = {
                 "timestamp": now,
+                "timestamp_iso": datetime.fromtimestamp(now).isoformat(timespec="milliseconds"),
                 "previous": previous,
                 "current": next_state,
                 "reason": reason,
@@ -435,7 +511,8 @@ class WelcomeInteractionFSM:
             return
         self.log(
             "talk",
-            f"WELCOME interaction {transition['previous']} -> {transition['current']}: {transition['reason']}",
+            f"WELCOME TRACE state transition / timestamp={transition.get('timestamp_iso')} / "
+            f"previous={transition['previous']!r} / current={transition['current']!r} / reason={transition['reason']!r}",
         )
 
     def _log_trace(self, event: str, **fields: Any) -> None:
@@ -452,6 +529,7 @@ class WelcomeInteractionFSM:
         self._status.max_recording_time = self.config.max_recording_time
         self._status.min_speech_duration = self.config.min_speech_duration
         self._status.queue_flush_duration = self.config.queue_flush_duration
+        self._status.human_detection_grace_duration = self.config.human_detection_grace_duration
 
     def _apply_perception_locked(self, perception: dict[str, Any]) -> None:
         self._status.human_detected = perception["human_detected"]
