@@ -967,9 +967,17 @@ class PlutoWebContext:
         if not audio_path:
             return {"accepted": False, "reason": "dance audio unavailable", "audio_file": None}
 
-        transition = self.request_state("DANCE", source="website_live_dance")
-        if not transition.get("accepted"):
-            return {"accepted": False, "reason": transition.get("reason", "DANCE transition rejected"), "transition": transition}
+        if self.mode_manager.current_state == "DANCE":
+            transition = {
+                "accepted": True,
+                "reason": "already in DANCE",
+                "state": "DANCE",
+                "substate": self.mode_manager.current_substate,
+            }
+        else:
+            transition = self.request_state("DANCE", source="website_live_dance")
+            if not transition.get("accepted"):
+                return {"accepted": False, "reason": transition.get("reason", "DANCE transition rejected"), "transition": transition}
 
         with self.lock:
             self.dance_live = DanceLiveRuntime(
