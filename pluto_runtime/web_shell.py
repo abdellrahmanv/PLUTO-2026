@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import platform
 import socket
 import subprocess
 import sys
 import threading
 import time
+import wave
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from http import HTTPStatus
@@ -53,6 +55,9 @@ PROJECT_NAME = "PLUTO"
 STM32_ID = "ID:STM32_MOTOR"
 UNO_ID = "ID:UNO_LCD"
 STATIC_DIR = Path(__file__).resolve().with_name("static")
+DANCE_FALLBACK_AUDIO = Path("/tmp/pluto_dance_beat.wav")
+DANCE_OPEN_LOOP_MOVE_S = 2.0
+DANCE_OPEN_LOOP_TURN_S = 1.6
 STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
@@ -952,19 +957,15 @@ class PlutoWebContext:
         self.log("stop", f"MANUAL stop result: neutral={neutral.get('detail')} stop={stop['detail']}")
         return {"accepted": bool(neutral.get("ok") and stop["ok"]), "speed": 0, "steer": 0, "serial": stop, "neutral": neutral}
 
-    def start_live_dance(self, use_ultrasonic: bool = True) -> dict[str, Any]:
+    def start_live_dance(self, use_ultrasonic: bool = False) -> dict[str, Any]:
         if self.dance_live_thread and self.dance_live_thread.is_alive():
             return {"accepted": False, "reason": "live dance already running", "live": asdict(self.dance_live)}
         if self.stm32_link is None or not self.hardware["stm32"].connected:
             return {"accepted": False, "reason": "STM32 unavailable"}
 
-        audio_path = self.dance_planner.config.audio_file_path
-        if not audio_path or not Path(audio_path).exists():
-            return {
-                "accepted": False,
-                "reason": "dance audio file missing; set PLUTO_DANCE_AUDIO on the Raspberry Pi",
-                "audio_file": audio_path,
-            }
+        audio_path = self._resolve_dance_audio_path()
+        if not audio_path:
+            return {"accepted": False, "reason": "dance audio unavailable", "audio_file": None}
 
         transition = self.request_state("DANCE", source="website_live_dance")
         if not transition.get("accepted"):
@@ -985,6 +986,38 @@ class PlutoWebContext:
         self.dance_live_thread.start()
         self.log("pass", f"Live DANCE started ({'careful' if use_ultrasonic else 'free'})")
         return {"accepted": True, "transition": transition, "live": asdict(self.dance_live)}
+
+    def _resolve_dance_audio_path(self) -> str | None:
+        configured = self.dance_planner.config.audio_file_path
+        if configured and Path(configured).exists():
+            return configured
+        try:
+            return str(self._ensure_fallback_dance_audio())
+        except Exception as exc:
+            self.log("warn", f"DANCE fallback audio unavailable: {exc}")
+            return None
+
+    def _ensure_fallback_dance_audio(self) -> Path:
+        if DANCE_FALLBACK_AUDIO.exists() and DANCE_FALLBACK_AUDIO.stat().st_size > 1024:
+            return DANCE_FALLBACK_AUDIO
+        sample_rate = 22050
+        duration_s = 28
+        beat_hz = 2.0
+        with wave.open(str(DANCE_FALLBACK_AUDIO), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            frames = bytearray()
+            total_samples = int(sample_rate * duration_s)
+            for i in range(total_samples):
+                t = i / sample_rate
+                beat_phase = (t * beat_hz) % 1.0
+                envelope = 1.0 if beat_phase < 0.09 else 0.22
+                tone = math.sin(2.0 * math.pi * 220.0 * t) + 0.35 * math.sin(2.0 * math.pi * 440.0 * t)
+                value = int(max(-1.0, min(1.0, tone * envelope * 0.38)) * 32767)
+                frames.extend(int(value).to_bytes(2, byteorder="little", signed=True))
+            wav.writeframes(bytes(frames))
+        return DANCE_FALLBACK_AUDIO
 
     def stop_live_dance(self, reason: str = "operator stop") -> dict[str, Any]:
         self.dance_live_stop.set()
@@ -1051,18 +1084,23 @@ class PlutoWebContext:
             self.dance_live.last_update_at = time.time()
 
     def _live_move_distance(self, direction: int, speed: int, label: str) -> None:
-        start_distance = self._live_distance_m()
-        start_heading = self._live_heading_deg()
+        start_distance = self._live_distance_m_or_none()
+        start_heading = self._live_heading_deg_or_none()
+        if start_distance is None:
+            self._live_move_timed(direction, speed, label)
+            return
         started = time.monotonic()
         target = DANCE_TARGET_DISTANCE_M
         while not self.dance_live_stop.is_set():
-            moved = abs(self._live_distance_m() - start_distance)
+            current_distance = self._live_distance_m_or_none()
+            moved = abs(current_distance - start_distance) if current_distance is not None else 0.0
             if moved >= target - DISTANCE_TOLERANCE_M:
                 break
             if time.monotonic() - started > 14.0:
                 raise TimeoutError(f"{label} timed out before reaching 2m")
             self._raise_if_live_obstacle()
-            heading_error = angle_delta_deg(start_heading, self._live_heading_deg())
+            current_heading = self._live_heading_deg_or_none()
+            heading_error = angle_delta_deg(start_heading, current_heading) if start_heading is not None and current_heading is not None else 0.0
             correction = max(-20, min(20, int(round(heading_error * 1.2))))
             command_speed = direction * abs(speed)
             command_steer = -correction
@@ -1076,12 +1114,38 @@ class PlutoWebContext:
             raise RuntimeError("live dance stopped by operator")
         self.send_stm32_stop_safe(self.hardware["stm32"].port)
 
+    def _live_move_timed(self, direction: int, speed: int, label: str) -> None:
+        started = time.monotonic()
+        while not self.dance_live_stop.is_set() and time.monotonic() - started < DANCE_OPEN_LOOP_MOVE_S:
+            self._raise_if_live_obstacle()
+            command_speed = direction * abs(speed)
+            result = self._send_live_drive(command_speed, 0)
+            elapsed = time.monotonic() - started
+            with self.lock:
+                self.dance_live.measured_distance_m = elapsed / max(0.1, DANCE_OPEN_LOOP_MOVE_S) * DANCE_TARGET_DISTANCE_M
+                self.dance_live.last_command = {
+                    "speed": command_speed,
+                    "steer": 0,
+                    "serial": result,
+                    "fallback": "timed_open_loop",
+                    "label": label,
+                }
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
     def _live_rotate_180(self, label: str) -> None:
-        start_heading = self._live_heading_deg()
+        start_heading = self._live_heading_deg_or_none()
+        if start_heading is None:
+            self._live_rotate_timed(label)
+            return
         start_ticks = self._live_drive_ack_count()
         started = time.monotonic()
         while not self.dance_live_stop.is_set():
-            turned = abs(angle_delta_deg(start_heading, self._live_heading_deg()))
+            current_heading = self._live_heading_deg_or_none()
+            turned = abs(angle_delta_deg(start_heading, current_heading)) if current_heading is not None else 0.0
             if turned >= DANCE_TARGET_TURN_DEG - TURN_TOLERANCE_DEG:
                 break
             if time.monotonic() - started > 10.0:
@@ -1098,6 +1162,29 @@ class PlutoWebContext:
             raise RuntimeError(f"{label} failed validation: no drive ACK movement evidence")
         self.send_stm32_stop_safe(self.hardware["stm32"].port)
 
+    def _live_rotate_timed(self, label: str) -> None:
+        start_ticks = self._live_drive_ack_count()
+        started = time.monotonic()
+        while not self.dance_live_stop.is_set() and time.monotonic() - started < DANCE_OPEN_LOOP_TURN_S:
+            result = self._send_live_drive(0, DANCE_MIN_STEER)
+            elapsed = time.monotonic() - started
+            with self.lock:
+                self.dance_live.measured_turn_deg = elapsed / max(0.1, DANCE_OPEN_LOOP_TURN_S) * DANCE_TARGET_TURN_DEG
+                self.dance_live.last_command = {
+                    "speed": 0,
+                    "steer": DANCE_MIN_STEER,
+                    "serial": result,
+                    "fallback": "timed_open_loop",
+                    "label": label,
+                }
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        if self._live_drive_ack_count() <= start_ticks:
+            raise RuntimeError(f"{label} failed validation: no drive ACK movement evidence")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
     def _send_live_drive(self, speed: int, steer: int) -> dict[str, Any]:
         if self.stm32_link is None or not self.hardware["stm32"].connected:
             raise RuntimeError("STM32 unavailable during live dance")
@@ -1105,6 +1192,12 @@ class PlutoWebContext:
         if not result.get("ok"):
             raise RuntimeError(str(result.get("detail") or "drive command failed"))
         return result
+
+    def _live_distance_m_or_none(self) -> float | None:
+        try:
+            return self._live_distance_m()
+        except Exception:
+            return None
 
     def _live_distance_m(self) -> float:
         if self.stm32_link is None:
@@ -1114,6 +1207,12 @@ class PlutoWebContext:
         if value is None:
             raise RuntimeError("encoder distance telemetry DIST missing")
         return float(value) / 100.0
+
+    def _live_heading_deg_or_none(self) -> float | None:
+        try:
+            return self._live_heading_deg()
+        except Exception:
+            return None
 
     def _live_heading_deg(self) -> float:
         if self.stm32_link is None:
@@ -1505,6 +1604,9 @@ class PlutoWebContext:
         if status.active and self.dance_live.active:
             status.dry_run = False
             status.phase = "dance_live"
+            status.audio_file = self.dance_live.audio_file
+            status.audio_file_present = bool(self.dance_live.audio_file and Path(self.dance_live.audio_file).exists())
+            status.audio_status = "playing" if self.dance_audio_started else "starting"
             status.dance_step = self.dance_live.current_step
             status.proposed_motion = "live_sequence"
             status.proposed_speed = int((self.dance_live.last_command or {}).get("speed") or 0)
@@ -3278,8 +3380,8 @@ def html_page() -> str:
         <div class="stageBox"><canvas id="danceStage" width="360" height="360"></canvas></div>
         <div class="manual-control-row" style="margin-top: 12px;">
           <label for="danceUseUltrasonic">Ultrasonic careful</label>
-          <input id="danceUseUltrasonic" type="checkbox" checked>
-          <span id="danceCarefulValue">careful</span>
+          <input id="danceUseUltrasonic" type="checkbox">
+          <span id="danceCarefulValue">free</span>
         </div>
         <div class="actions" style="margin-top: 12px;">
           <button class="primary" id="danceStart">Start Live Dance</button>
