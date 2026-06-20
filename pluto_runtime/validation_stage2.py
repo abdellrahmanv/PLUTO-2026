@@ -122,8 +122,9 @@ class Stage2ValidationRunner:
             "return_active": self._numeric(latest.get("RET")),
         }
 
-        available_fields = [key for key in ("BAT", "TEMP", "SPD", "DIST", "X", "Y", "H") if latest.get(key) is not None]
-        missing_fields = [key for key in ("BAT", "TEMP", "SPD", "DIST", "X", "Y", "H") if latest.get(key) is None]
+        required_fields = ("BAT", "TEMP", "SPD", "DIST", "X", "Y", "H")
+        available_fields = [key for key in required_fields if self._has_value(latest.get(key))]
+        missing_fields = [key for key in required_fields if not self._has_value(latest.get(key))]
         raw_rpm_right = latest.get("RPM_R") or latest.get("RPMR") or latest.get("R_RPM")
         raw_rpm_left = latest.get("RPM_L") or latest.get("RPML") or latest.get("L_RPM")
         raw_rpm_available = raw_rpm_right is not None and raw_rpm_left is not None
@@ -168,9 +169,10 @@ class Stage2ValidationRunner:
                 "COMMUNICATION_FAILURE",
             )
         if voltage is None or temperature_c is None:
+            missing_text = ", ".join(missing_fields) if missing_fields else "non-numeric telemetry values"
             return Stage2Result(
                 WARNING,
-                "\n".join(lines + [f"Missing required hoverboard feedback fields: {', '.join(missing_fields)}"]),
+                "\n".join(lines + [f"Missing required hoverboard feedback fields: {missing_text}"]),
                 measurements,
                 "COMMUNICATION_FAILURE",
             )
@@ -462,10 +464,16 @@ class Stage2ValidationRunner:
     def _numeric(value: Any) -> float | None:
         if value is None:
             return None
+        if isinstance(value, str) and not value.strip():
+            return None
         try:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        return value is not None and not (isinstance(value, str) and not value.strip())
 
     @staticmethod
     def _fmt(value: float | None, unit: str) -> str:
