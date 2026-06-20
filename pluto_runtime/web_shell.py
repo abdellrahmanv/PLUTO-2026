@@ -3054,6 +3054,7 @@ def html_page() -> str:
         <div class="metric"><span class="label">Mic</span><span class="value" id="audioMic">none</span></div>
         <div class="metric"><span class="label">Speaker</span><span class="value" id="audioSpeaker">none</span></div>
         <div class="metric"><span class="label">Speech IO</span><span class="value" id="audioEngines">none</span></div>
+        <div class="metric"><span class="label">Whisper STT</span><span class="value" id="audioWhisper">none</span></div>
         <div class="talk-row">
           <input id="talkInput" maxlength="120" placeholder="Ask Pluto a short question">
           <button class="primary" id="talkAsk">Ask</button>
@@ -4185,6 +4186,8 @@ def html_page() -> str:
       document.getElementById('audioSpeakerOverride').placeholder = audio.requested_speaker || 'Speaker override, e.g. plughw:CARD=Headphones,DEV=0';
       document.getElementById('audioEngines').textContent =
         `${{audio.stt_backend || 'stt?'}} / ${{audio.tts_backend || 'tts?'}}${{tts.detail ? ' / ' + tts.detail : ''}}`;
+      document.getElementById('audioWhisper').textContent =
+        `${{audio.stt_backend || 'stt?'}} / ${{audio.stt_detail || 'model unknown'}} / last ${{transcript.elapsed_ms == null ? 'none' : Number(transcript.elapsed_ms).toFixed(0) + ' ms'}}`;
       const camera = data.camera || {{}};
       const feed = document.getElementById('cameraFeed');
       const unavailable = document.getElementById('cameraUnavailable');

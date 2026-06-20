@@ -146,7 +146,7 @@ def main() -> int:
     assert status["tts_finished"] is True, status
     assert status["post_tts_active"] is False, status
     assert status["cooldown_active"] is False, status
-    assert any("SPEAKING -> POST_TTS_BUFFER" in message for _, message in logs), logs
+    assert any("previous='SPEAKING'" in message and "current='POST_TTS_BUFFER'" in message for _, message in logs), logs
     fsm.stop("smoke complete")
 
     sequence = [
@@ -206,6 +206,39 @@ def main() -> int:
     assert intro not in auto_audio.spoken_texts, auto_audio.spoken_texts
     assert "I am Pluto." in auto_audio.spoken_texts, auto_audio.spoken_texts
     auto_fsm.stop("auto smoke complete")
+
+    flicker_sequence = [True, False, False, True, True]
+
+    def flicker_camera_status() -> dict:
+        present = flicker_sequence.pop(0) if flicker_sequence else True
+        detections = [{"bbox": [70, 40, 220, 280], "confidence": 0.88, "class_name": "human", "track_id": 1}] if present else []
+        return {"available": True, "running": True, "human_count": len(detections), "detections": detections}
+
+    flicker_logs: list[tuple[str, str]] = []
+    flicker_audio = FakeAudioRuntime()
+    flicker_fsm = WelcomeInteractionFSM(
+        camera_status=flicker_camera_status,
+        audio_runtime=flicker_audio,
+        talk_engine=WelcomeTalkEngine(),
+        mode_state=lambda: "WELCOME",
+        stop_guard=lambda: {"ok": True, "detail": "ACK:STOP"},
+        log=lambda level, message: flicker_logs.append((level, message)),
+        config=WelcomeInteractionConfig(
+            post_tts_delay=0.01,
+            cooldown_duration=0.01,
+            max_recording_time=0.5,
+            queue_flush_duration=0.0,
+            scan_period=0.02,
+            human_detection_grace_duration=1.0,
+        ),
+    )
+    flicker_fsm.start(trigger_source="camera_human", operator_triggered=False, auto_return_to_idle=True, greet_on_human_detection=False)
+    wait_for(
+        lambda: flicker_audio.listen_calls >= 1,
+        lambda: f"auto WELCOME flicker blocked first listen: {flicker_fsm.status()} logs={flicker_logs}",
+    )
+    assert any("auto human detection grace used" in message for _, message in flicker_logs), flicker_logs
+    flicker_fsm.stop("flicker smoke complete")
 
     print("WELCOME_INTERACTION_SMOKE PASS")
     return 0

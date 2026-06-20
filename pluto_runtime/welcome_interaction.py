@@ -34,6 +34,7 @@ class WelcomeInteractionConfig:
     silence_duration: float = 1.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
+    human_detection_grace_duration: float = 1.5
     speech_threshold: float = 0.03
     scan_period: float = 0.15
     intro_text: str = "Welcome. I am Pluto, a graduation project robot."
@@ -46,6 +47,7 @@ class WelcomeInteractionConfig:
             "silence_duration": (0.2, 5.0),
             "min_speech_duration": (0.0, 3.0),
             "queue_flush_duration": (0.0, 2.0),
+            "human_detection_grace_duration": (0.0, 5.0),
             "speech_threshold": (0.0, 1.0),
             "scan_period": (0.05, 2.0),
         }
@@ -83,6 +85,7 @@ class WelcomeInteractionStatus:
     max_recording_time: float = 3.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
+    human_detection_grace_duration: float = 1.5
     human_detection_confidence: float = 0.0
     human_count: int = 0
     bounding_box: list[int] | None = None
@@ -137,6 +140,7 @@ class WelcomeInteractionFSM:
         self._greet_on_human_detection = False
         self._intro_text = self.config.intro_text
         self._interaction_started = 0.0
+        self._human_detection_grace_until = 0.0
 
     def start(
         self,
@@ -155,6 +159,7 @@ class WelcomeInteractionFSM:
             self._intro_text = self.config.intro_text
             self._running = True
             self._interaction_started = time.monotonic()
+            self._human_detection_grace_until = 0.0
             transition = self._set_state_locked("SCANNING", "WELCOME interaction armed")
             self._sync_config_locked()
             self._status.enabled = True
@@ -252,6 +257,8 @@ class WelcomeInteractionFSM:
                 self._initial_response = self._intro_text
                 self._status.initial_response_pending = True
         if perception["human_detected"]:
+            if not self._operator_triggered:
+                self._human_detection_grace_until = time.monotonic() + self.config.human_detection_grace_duration
             reason = "human detected; intro pending" if not was_human_detected else "human still detected"
             self._transition("HUMAN_DETECTED", reason)
 
@@ -289,8 +296,14 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._apply_perception_locked(perception)
         if not perception["human_detected"] and not self._operator_triggered:
-            self._transition("SCANNING", "human no longer detected before listening")
-            return
+            if time.monotonic() > self._human_detection_grace_until:
+                self._transition("SCANNING", "human no longer detected before listening")
+                return
+            self._log_trace(
+                "auto human detection grace used",
+                grace_until_monotonic=self._human_detection_grace_until,
+                trigger_source=self._trigger_source,
+            )
         with self._lock:
             self._status.audio_queue = ["microphone"]
             self._status.speech_detected = False
@@ -507,6 +520,7 @@ class WelcomeInteractionFSM:
         self._status.max_recording_time = self.config.max_recording_time
         self._status.min_speech_duration = self.config.min_speech_duration
         self._status.queue_flush_duration = self.config.queue_flush_duration
+        self._status.human_detection_grace_duration = self.config.human_detection_grace_duration
 
     def _apply_perception_locked(self, perception: dict[str, Any]) -> None:
         self._status.human_detected = perception["human_detected"]
