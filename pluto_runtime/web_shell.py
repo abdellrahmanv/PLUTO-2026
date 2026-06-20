@@ -179,6 +179,9 @@ class PlutoWebContext:
         self.wave_thread: threading.Thread | None = None
         self.manual_thread_running = True
         self.manual_thread: threading.Thread | None = None
+        self.uno_thread_running = False
+        self.uno_thread: threading.Thread | None = None
+        self.uno_port: str | None = None
         self.approach_planner = WelcomeApproachPlanner()
         self.approach_status = ApproachStatus()
         self.approach_last_stop_at = 0.0
@@ -272,6 +275,7 @@ class PlutoWebContext:
         self.manual_thread_running = False
         if self.manual_thread and self.manual_thread.is_alive():
             self.manual_thread.join(timeout=1.0)
+        self.stop_uno_button_monitor()
         self.welcome_interaction.stop("web shell stopping")
         self.stop_stm32_link()
         self.audio_runtime.stop_playback(reason="web shell stopping")
@@ -335,6 +339,7 @@ class PlutoWebContext:
                 next_send = now + period_s
 
     def refresh_hardware(self) -> None:
+        self.stop_uno_button_monitor()
         self.stop_stm32_link()
         ports = candidate_ports()
         self.log("info", f"Scanning serial ports: {', '.join(ports) if ports else 'none'}")
@@ -412,6 +417,9 @@ class PlutoWebContext:
                 elif self.mode_manager.current_state != "ERROR":
                     self.mode_manager.enter_error("STM32 motor safety controller missing", source="hardware_refresh")
 
+        if uno.connected:
+            self.start_uno_button_monitor(uno.port)
+
     def start_stm32_link(self, port: str | None) -> None:
         if not port:
             return
@@ -427,18 +435,86 @@ class PlutoWebContext:
         if link is not None:
             link.stop()
 
-    def emergency_stop(self) -> dict[str, Any]:
+    def start_uno_button_monitor(self, port: str | None) -> None:
+        if not port:
+            return
+        if self.uno_thread and self.uno_thread.is_alive() and self.uno_port == port:
+            return
+        self.stop_uno_button_monitor()
+        self.uno_port = port
+        self.uno_thread_running = True
+        self.uno_thread = threading.Thread(
+            target=self._uno_button_monitor_loop,
+            args=(port,),
+            name="pluto-uno-buttons",
+            daemon=True,
+        )
+        self.uno_thread.start()
+        self.log("pass", f"Uno button listener started on {port}")
+
+    def stop_uno_button_monitor(self) -> None:
+        self.uno_thread_running = False
+        thread = self.uno_thread
+        self.uno_thread = None
+        self.uno_port = None
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _uno_button_monitor_loop(self, port: str) -> None:
+        while self.uno_thread_running and self.uno_port == port:
+            try:
+                with serial_open(port, self.serial_baud) as ser:
+                    time.sleep(1.8)
+                    serial_write(ser, "ID?")
+                    while self.uno_thread_running and self.uno_port == port:
+                        line = serial_read_line(ser)
+                        if not line:
+                            time.sleep(0.02)
+                            continue
+                        if line == UNO_ID or line.startswith(("ACK:", "TOUCH:")):
+                            continue
+                        if not line.startswith("BTN:"):
+                            continue
+
+                        command = line.split(":", 1)[1].strip()
+                        result = self.handle_uno_button(command)
+                        current_state = str(result.get("state") or result.get("current_state") or self.mode_manager.current_state)
+                        try:
+                            serial_write(ser, f"ACK:BTN:{command}")
+                            serial_write(ser, f"MODE:{current_state}")
+                            if result.get("accepted") is False:
+                                reason = str(result.get("reason") or "command rejected")[:36]
+                                serial_write(ser, f"WARN:{reason}")
+                        except Exception as exc:
+                            self.log("warn", f"Uno button ACK failed: {exc}")
+            except Exception as exc:
+                if self.uno_thread_running and self.uno_port == port:
+                    self.log("warn", f"Uno button listener error on {port}: {exc}")
+                    time.sleep(1.0)
+
+    def handle_uno_button(self, command: str) -> dict[str, Any]:
+        normalized = command.strip().upper().replace("-", "_").replace(" ", "_")
+        if normalized in {"EMERGENCY_STOP", "ESTOP", "E_STOP", "STOP"}:
+            stop = self.emergency_stop(source="uno_button")
+            return {"accepted": True, "state": stop["state"], "emergency_stop": stop}
+        if normalized in {"IDLE", "WELCOME", "DANCE"}:
+            return self.request_state(normalized, reset_fault=normalized == "IDLE", source="uno_button")
+
+        self.log("warn", f"Uno button ignored unknown command: {command}")
+        return {"accepted": False, "state": self.mode_manager.current_state, "reason": "unknown Uno button command"}
+
+    def emergency_stop(self, source: str = "website") -> dict[str, Any]:
         started = time.monotonic()
         stm32 = self.hardware["stm32"]
         stop = self.send_stm32_stop_safe(stm32.port)
         elapsed_ms = (time.monotonic() - started) * 1000.0
 
         with self.lock:
-            result = self.mode_manager.enter_error("Emergency stop requested from website", source="website")
+            result = self.mode_manager.enter_error(f"Emergency stop requested from {source}", source=source)
             self.manual.enabled = False
             self.manual.speed_intent = 0
             self.manual.steer_intent = 0
-            self.log("stop", f"Emergency stop requested, serial result: {stop['detail']}")
+            self.log("stop", f"Emergency stop requested from {source}, serial result: {stop['detail']}")
 
         return {
             "ok": bool(stop["ok"]),
@@ -496,7 +572,7 @@ class PlutoWebContext:
             fault_reason=self.mode_manager.fault_reason,
         )
 
-    def request_state(self, requested_state: str, reset_fault: bool = False) -> dict[str, Any]:
+    def request_state(self, requested_state: str, reset_fault: bool = False, source: str = "website") -> dict[str, Any]:
         requested_state = requested_state.strip().upper()
         if requested_state not in VALID_STATES:
             self.log("warn", f"Rejected unknown state request: {requested_state}")
@@ -509,8 +585,8 @@ class PlutoWebContext:
         result = self.mode_manager.request_transition(
             requested_state,
             context,
-            source="website",
-            reason=f"website requested {requested_state}",
+            source=source,
+            reason=f"{source} requested {requested_state}",
             reset_fault=reset_fault,
         )
 
@@ -527,7 +603,7 @@ class PlutoWebContext:
             if result.current_state == "WELCOME":
                 self.auto_welcome_no_human_since = None
                 self.welcome_interaction.start(
-                    trigger_source="website",
+                    trigger_source=source,
                     operator_triggered=True,
                     initial_response="",
                     auto_return_to_idle=False,

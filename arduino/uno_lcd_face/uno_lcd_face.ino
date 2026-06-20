@@ -21,6 +21,12 @@
   - TEXT:<message>
   - WARN:<message>
   - FACE:<gesture>
+
+  Touch commands emitted to Raspberry Pi:
+  - BTN:IDLE
+  - BTN:WELCOME
+  - BTN:DANCE
+  - BTN:EMERGENCY_STOP
 */
 
 #include <Adafruit_GFX.h>
@@ -62,13 +68,8 @@ struct StateTile {
 StateTile states[] = {
   {"IDLE", "Idle", CYAN},
   {"WELCOME", "Welcome", GREEN},
-  {"TALK", "Talk", PINK},
   {"DANCE", "Dance", YELLOW},
-  {"MANUAL", "Manual", ORANGE},
-  {"GAME", "Game", BLUE},
-  {"FACE", "Face", PURPLE},
-  {"ERROR", "Error", RED},
-  {"STOP", "Stop", WHITE},
+  {"EMERGENCY_STOP", "Emergency Stop", RED},
 };
 
 static const uint8_t STATE_COUNT = sizeof(states) / sizeof(states[0]);
@@ -77,7 +78,7 @@ MCUFRIEND_kbv tft;
 TouchScreen touch = TouchScreen(XP, YP, XM, YM, 300);
 
 char modeText[18] = "IDLE";
-char statusText[44] = "Select Pluto state";
+char statusText[44] = "Touch command for Raspberry Pi";
 char serialLine[72];
 uint8_t serialLen = 0;
 uint8_t selectedIndex = 0;
@@ -285,10 +286,15 @@ void readTouch() {
   if (isFaceMode()) {
     handleFaceTouch(index);
   } else {
-    setMode(states[index].name);
-    copyStatus("State selected");
+    const char *command = states[index].name;
+    setMode(command);
+    if (strcmp(command, "EMERGENCY_STOP") == 0) {
+      copyStatus("Emergency stop sent");
+    } else {
+      copyStatus("Command sent to Pi");
+    }
     Serial.print(F("BTN:"));
-    Serial.println(modeText);
+    Serial.println(command);
   }
   pendingTouchIndex = -1;
   pendingTouchCount = 0;
@@ -603,10 +609,10 @@ void drawHeader() {
   tft.setTextColor(WHITE);
   tft.setTextSize(2);
   tft.setCursor(16, 12);
-  tft.print(F("PLUTO STATE"));
+  tft.print(F("PLUTO COMMANDS"));
 
   tft.setTextColor(states[selectedIndex].color);
-  tft.setCursor(screenW - 150, 12);
+  tft.setCursor(screenW - 190, 12);
   tft.print(modeText);
 }
 
@@ -657,12 +663,12 @@ void drawStatus() {
 
 void tileRect(uint8_t index, int *x, int *y, int *w, int *h) {
   int margin = 10;
-  int gap = 8;
-  int cols = 3;
-  int rows = 3;
-  int top = 60;
-  int bottom = screenH - 52;
-  int tileW = (screenW - margin * 2 - gap) / cols;
+  int gap = 12;
+  int cols = 2;
+  int rows = 2;
+  int top = 62;
+  int bottom = screenH - 54;
+  int tileW = (screenW - margin * 2 - gap * (cols - 1)) / cols;
   int tileH = (bottom - top - gap * (rows - 1)) / rows;
   int col = index % cols;
   int row = index / cols;
@@ -701,14 +707,12 @@ void handleFaceTouch(int action) {
   if (action == 0) {
     setMode("IDLE");
     copyStatus("State menu");
-    Serial.println(F("BTN:MENU"));
+    Serial.println(F("BTN:IDLE"));
     return;
   }
 
   currentGesture = (currentGesture + 1) % GESTURE_COUNT;
   redrawAll = true;
-  Serial.print(F("BTN:FACE:"));
-  Serial.println(gestures[currentGesture]);
 }
 
 void printClipped(const char *value, uint8_t maxChars) {
