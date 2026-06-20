@@ -19,6 +19,7 @@ import time
 import wave
 from array import array
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -189,10 +190,12 @@ class AudioRuntime:
             str(arecord_seconds),
             str(path),
         ]
+        started_at = timestamp_now()
         started = time.monotonic()
         try:
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=duration + 6)
             elapsed_ms = (time.monotonic() - started) * 1000.0
+            ended_at = timestamp_now()
             ok = proc.returncode == 0 and path.exists() and path.stat().st_size > 44
             signal = wav_signal_stats(path) if ok else {}
             result = {
@@ -204,21 +207,48 @@ class AudioRuntime:
                 "bytes": path.stat().st_size if path.exists() else 0,
                 "device": status.selected_microphone,
                 "signal": signal,
+                "started_at": started_at,
+                "ended_at": ended_at,
             }
         except Exception as exc:
-            result = {"ok": False, "detail": str(exc), "path": None, "duration_s": duration, "device": status.selected_microphone}
+            result = {
+                "ok": False,
+                "detail": str(exc),
+                "path": None,
+                "duration_s": duration,
+                "device": status.selected_microphone,
+                "started_at": started_at,
+                "ended_at": timestamp_now(),
+                "elapsed_ms": (time.monotonic() - started) * 1000.0,
+            }
         self._set_recording(result)
         return result
 
     def transcribe(self, wav_path: str | None) -> dict[str, Any]:
+        started_at = timestamp_now()
+        started_total = time.monotonic()
         if not wav_path:
-            result = {"ok": False, "detail": "no recording path", "text": ""}
+            result = {
+                "ok": False,
+                "detail": "no recording path",
+                "text": "",
+                "started_at": started_at,
+                "ended_at": timestamp_now(),
+                "elapsed_ms": (time.monotonic() - started_total) * 1000.0,
+            }
             self._set_transcript(result)
             return result
 
         model_path = discover_whisper_model()
         if not model_path:
-            result = {"ok": False, "detail": "faster-whisper model not found", "text": ""}
+            result = {
+                "ok": False,
+                "detail": "faster-whisper model not found",
+                "text": "",
+                "started_at": started_at,
+                "ended_at": timestamp_now(),
+                "elapsed_ms": (time.monotonic() - started_total) * 1000.0,
+            }
             self._set_transcript(result)
             return result
 
@@ -232,6 +262,9 @@ class AudioRuntime:
                     "elapsed_ms": 0.0,
                     "signal": signal,
                     "min_rms": self.min_rms,
+                    "confidence": None,
+                    "started_at": started_at,
+                    "ended_at": timestamp_now(),
                 }
                 self._set_transcript(result)
                 return result
@@ -251,8 +284,10 @@ class AudioRuntime:
                 vad_filter=False,
                 condition_on_previous_text=False,
             )
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            segment_list = list(segments)
+            text = " ".join(segment.text.strip() for segment in segment_list).strip()
             elapsed_ms = (time.monotonic() - started_transcribe) * 1000.0
+            confidence = getattr(info, "language_probability", None)
             result = {
                 "ok": True,
                 "detail": "transcribed",
@@ -261,17 +296,53 @@ class AudioRuntime:
                 "model_load_ms": load_ms,
                 "model": model_path,
                 "duration_s": getattr(info, "duration", None),
+                "confidence": confidence,
+                "segment_count": len(segment_list),
+                "started_at": started_at,
+                "ended_at": timestamp_now(),
                 "signal": signal,
             }
         except Exception as exc:
-            result = {"ok": False, "detail": str(exc), "text": "", "model": model_path}
+            result = {
+                "ok": False,
+                "detail": str(exc),
+                "text": "",
+                "model": model_path,
+                "started_at": started_at,
+                "ended_at": timestamp_now(),
+                "elapsed_ms": (time.monotonic() - started_total) * 1000.0,
+                "confidence": None,
+            }
         self._set_transcript(result)
         return result
 
     def listen(self, duration_s: float = 3.0) -> dict[str, Any]:
+        listen_started_at = timestamp_now()
+        listen_started = time.monotonic()
         recording = self.record(duration_s)
+        transcribe_started_at = timestamp_now()
+        transcribe_started = time.monotonic()
         transcript = self.transcribe(recording.get("path")) if recording.get("ok") else {"ok": False, "detail": recording.get("detail"), "text": ""}
-        return {"ok": bool(recording.get("ok")) and bool(transcript.get("ok")), "recording": recording, "transcript": transcript}
+        transcribe_latency_ms = (time.monotonic() - transcribe_started) * 1000.0
+        listen_latency_ms = (time.monotonic() - listen_started) * 1000.0
+        return {
+            "ok": bool(recording.get("ok")) and bool(transcript.get("ok")),
+            "recording": recording,
+            "transcript": transcript,
+            "timing": {
+                "listen_started_at": listen_started_at,
+                "listen_ended_at": timestamp_now(),
+                "listen_latency_ms": listen_latency_ms,
+                "record_latency_ms": recording.get("elapsed_ms"),
+                "record_started_at": recording.get("started_at"),
+                "record_ended_at": recording.get("ended_at"),
+                "transcribe_started_at": transcribe_started_at,
+                "transcribe_ended_at": transcript.get("ended_at"),
+                "transcribe_latency_ms": transcript.get("elapsed_ms", transcribe_latency_ms),
+                "transcribe_wall_latency_ms": transcribe_latency_ms,
+                "model_load_ms": transcript.get("model_load_ms"),
+            },
+        }
 
     def speak_async(self, text: str, playback_device: str | None = None) -> dict[str, Any]:
         clean_text = str(text or "").strip()
@@ -299,24 +370,33 @@ class AudioRuntime:
             self._set_tts(result)
             return result
 
+        total_started_at = timestamp_now()
+        total_started = time.monotonic()
         self.ensure_max_volume()
+        prepare_ended_at = timestamp_now()
         piper_binary, piper_model = discover_piper()
         status = self.probe_status
         device = playback_device or status.selected_speaker
         if not piper_binary or not piper_model:
-            result = {"ok": False, "detail": "piper unavailable", "text": clean_text}
+            result = {"ok": False, "detail": "piper unavailable", "text": clean_text, "started_at": total_started_at, "ended_at": timestamp_now()}
             self._set_tts(result)
             return result
         if not device or not shutil.which("aplay"):
-            result = {"ok": False, "detail": "speaker/aplay unavailable", "text": clean_text}
+            result = {"ok": False, "detail": "speaker/aplay unavailable", "text": clean_text, "started_at": total_started_at, "ended_at": timestamp_now()}
             self._set_tts(result)
             return result
 
         wav_path = self.cache_dir / f"{hashlib.sha1(clean_text.encode('utf-8')).hexdigest()}.wav"
         started = time.monotonic()
         generated = False
+        cache_hit = wav_path.exists()
+        synthesis_started_at = None
+        synthesis_ended_at = None
+        play_started_at = None
+        play_ended_at = None
         try:
             if not wav_path.exists():
+                synthesis_started_at = timestamp_now()
                 proc = subprocess.run(
                     [piper_binary, "--model", piper_model, "--output_file", str(wav_path)],
                     input=clean_text + "\n",
@@ -328,9 +408,12 @@ class AudioRuntime:
                 if proc.returncode != 0:
                     raise RuntimeError(proc.stderr.strip() or "piper failed")
                 generated = True
+                synthesis_ended_at = timestamp_now()
             gen_ms = (time.monotonic() - started) * 1000.0
+            play_started_at = timestamp_now()
             play_started = time.monotonic()
             proc = subprocess.run(["aplay", "-q", "-D", device, str(wav_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
+            play_ended_at = timestamp_now()
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr.strip() or "aplay failed")
             result = {
@@ -342,9 +425,33 @@ class AudioRuntime:
                 "generate_ms": gen_ms,
                 "play_ms": (time.monotonic() - play_started) * 1000.0,
                 "device": device,
+                "started_at": total_started_at,
+                "ended_at": timestamp_now(),
+                "prepare_ended_at": prepare_ended_at,
+                "synthesis_started_at": synthesis_started_at,
+                "synthesis_ended_at": synthesis_ended_at,
+                "playback_started_at": play_started_at,
+                "playback_ended_at": play_ended_at,
+                "total_latency_ms": (time.monotonic() - total_started) * 1000.0,
+                "cache_hit": cache_hit,
             }
         except Exception as exc:
-            result = {"ok": False, "detail": str(exc), "text": clean_text, "path": str(wav_path), "device": device}
+            result = {
+                "ok": False,
+                "detail": str(exc),
+                "text": clean_text,
+                "path": str(wav_path),
+                "device": device,
+                "started_at": total_started_at,
+                "ended_at": timestamp_now(),
+                "prepare_ended_at": prepare_ended_at,
+                "synthesis_started_at": synthesis_started_at,
+                "synthesis_ended_at": synthesis_ended_at,
+                "playback_started_at": play_started_at,
+                "playback_ended_at": play_ended_at,
+                "total_latency_ms": (time.monotonic() - total_started) * 1000.0,
+                "cache_hit": cache_hit,
+            }
         self._set_tts(result)
         return result
 
@@ -451,6 +558,10 @@ def run_text(command: list[str], timeout: float = 5.0) -> str:
         return proc.stdout
     except Exception:
         return ""
+
+
+def timestamp_now() -> str:
+    return datetime.now().isoformat(timespec="milliseconds")
 
 
 def parse_alsa_devices(output: str, kind: str) -> list[AudioDevice]:

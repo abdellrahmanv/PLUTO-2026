@@ -20,6 +20,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -954,10 +955,25 @@ class PlutoWebContext:
         return self.welcome_interaction.configure(values)
 
     def record_welcome_talk_result(self, talk_result: TalkResult) -> None:
+        started = time.monotonic()
+        self.log(
+            "talk",
+            "WELCOME TRACE web_shell.on_talk_result start / "
+            f"timestamp={datetime.now().isoformat(timespec='milliseconds')} / "
+            f"intent={talk_result.intent!r} / reason={talk_result.reason!r} / "
+            f"latency_ms={talk_result.latency_ms!r}",
+        )
         with self.lock:
             self.talk_last_result = talk_result
             self.talk_history.appendleft(talk_result)
             self.talk_last_notice = talk_result.response
+        self.log(
+            "talk",
+            "WELCOME TRACE web_shell.on_talk_result end / "
+            f"timestamp={datetime.now().isoformat(timespec='milliseconds')} / "
+            f"callback_latency_ms={(time.monotonic() - started) * 1000.0:.3f} / "
+            f"intent={talk_result.intent!r} / reason={talk_result.reason!r}",
+        )
 
     def audio_speak(self, text: str) -> dict[str, Any]:
         result = self.audio_runtime.speak_async(text)
