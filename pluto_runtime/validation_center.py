@@ -142,6 +142,18 @@ TESTS: tuple[ValidationTest, ...] = (
         runtime_test=True,
     ),
     ValidationTest(
+        test_id="hoverboard-feedback",
+        name="Hoverboard Feedback Test",
+        category="Motion Tests",
+        safety_level="hardware-safe",
+        required_hardware=("stm32",),
+        script_args=("tools/validation_stage2_runner.py", "--test", "hoverboard-feedback"),
+        button_label="Run Feedback",
+        timeout_s=15,
+        stage="Stage 2",
+        runtime_test=True,
+    ),
+    ValidationTest(
         test_id="nema-arm-physical",
         name="Physical NEMA Arm Test",
         category="Motion Tests",

@@ -105,6 +105,7 @@ def main() -> int:
         assert "stm32-stress" in by_id
         assert "welcome-interaction-loop" in by_id
         assert "bldc-motor-physical" in by_id
+        assert "hoverboard-feedback" in by_id
         assert "nema-arm-physical" in by_id
         assert "camera-live" in by_id
         assert "human-detection-live" in by_id
