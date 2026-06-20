@@ -11,6 +11,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 
@@ -300,12 +301,21 @@ class WelcomeInteractionFSM:
             self.audio_runtime.min_rms = self.config.speech_threshold
         except Exception:
             pass
+        self._log_trace("audio listen start", max_recording_time_s=self.config.max_recording_time)
         listen = self.audio_runtime.listen(self.config.max_recording_time)
+        self._log_trace("audio listen end")
         recording = listen.get("recording") or {}
         transcript = listen.get("transcript") or {}
         signal = recording.get("signal") or transcript.get("signal") or {}
         rms = float(signal.get("rms") or 0.0)
         text = str(transcript.get("text") or "").strip()
+        self._log_trace(
+            "transcript text received",
+            transcript_text=text,
+            transcript_word_count=len(text.split()) if text else 0,
+            transcript_ok=bool(transcript.get("ok")),
+            transcript_detail=transcript.get("detail", ""),
+        )
         speech_detected = rms >= self.config.speech_threshold
         perception = self._extract_perception(self.camera_status())
         with self._lock:
@@ -326,7 +336,21 @@ class WelcomeInteractionFSM:
 
     def _generate_response(self) -> None:
         text = self.status().get("transcript", "")
+        self._log_trace("talk_engine.answer start", transcript_text=text, transcript_word_count=len(str(text).split()) if text else 0)
         result = self.talk_engine.answer(text)
+        unknown_response = str(getattr(getattr(self.talk_engine, "config", None), "unknown_response", ""))
+        fallback_used = getattr(result, "response_source", "") == "fallback" or str(getattr(result, "response", "")) == unknown_response
+        ollama_enabled = bool(getattr(getattr(self.talk_engine, "config", None), "enable_ollama_fallback", False))
+        self._log_trace(
+            "talk_engine.answer end",
+            intent=getattr(result, "intent", None),
+            reason=getattr(result, "reason", ""),
+            latency_ms=getattr(result, "latency_ms", None),
+            response_source=getattr(result, "response_source", ""),
+            fallback_unknown_response_used=fallback_used,
+            ollama_llm_fallback_called=False,
+            ollama_llm_fallback_enabled=ollama_enabled,
+        )
         response = str(getattr(result, "response", "") or "").strip()
         with self._lock:
             self._status.response_text = response
@@ -343,7 +367,16 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._status.audio_queue = ["tts"]
             self._status.tts_finished = False
+        self._log_trace("TTS start", response_text=response, response_word_count=len(str(response).split()) if response else 0)
         result = self.audio_runtime.speak(response)
+        self._log_trace(
+            "TTS finished",
+            tts_ok=bool(result.get("ok")),
+            tts_detail=result.get("detail", ""),
+            tts_generated=bool(result.get("generated")),
+            tts_generate_ms=result.get("generate_ms"),
+            tts_play_ms=result.get("play_ms"),
+        )
         with self._lock:
             self._status.audio_status = self.audio_runtime.status()
             self._status.audio_queue = []
@@ -404,6 +437,13 @@ class WelcomeInteractionFSM:
             "talk",
             f"WELCOME interaction {transition['previous']} -> {transition['current']}: {transition['reason']}",
         )
+
+    def _log_trace(self, event: str, **fields: Any) -> None:
+        timestamp = datetime.now().isoformat(timespec="milliseconds")
+        parts = [f"WELCOME TRACE {event}", f"timestamp={timestamp}"]
+        for key, value in fields.items():
+            parts.append(f"{key}={value!r}")
+        self.log("talk", " / ".join(parts))
 
     def _sync_config_locked(self) -> None:
         self._status.speech_threshold = self.config.speech_threshold
