@@ -3031,6 +3031,8 @@ def html_page() -> str:
         <div class="metric"><span class="label">Response</span><span class="value" id="talkResponse">none</span></div>
         <div class="metric"><span class="label">Transcript</span><span class="value" id="talkTranscript">none</span></div>
         <div class="metric"><span class="label">Interaction FSM</span><span class="value" id="welcomeFsmState">SCANNING</span></div>
+        <div class="metric"><span class="label">Audio Stage</span><span class="value" id="welcomeAudioStage">idle</span></div>
+        <div class="metric"><span class="label">FSM Latency</span><span class="value" id="welcomeLatency">none</span></div>
         <div class="metric"><span class="label">Interaction Flags</span><span class="value" id="welcomeFsmFlags">idle</span></div>
         <div class="metric"><span class="label">Human Target</span><span class="value" id="welcomeFsmHuman">none</span></div>
         <div class="metric"><span class="label">Last Transition</span><span class="value" id="welcomeFsmReason">not started</span></div>
@@ -3065,7 +3067,10 @@ def html_page() -> str:
               <input id="welcomeCooldown" type="number" min="0.2" max="10" step="0.1" value="2.0">
             </label>
             <label>Listen max
-              <input id="welcomeMaxRecording" type="number" min="0.5" max="8" step="0.5" value="3.0">
+              <input id="welcomeMaxRecording" type="number" min="0.5" max="8" step="0.5" value="6.0">
+            </label>
+            <label>Silence
+              <input id="welcomeSilence" type="number" min="0.2" max="5" step="0.1" value="2.0">
             </label>
             <label>Speech RMS
               <input id="welcomeSpeechThreshold" type="number" min="0" max="1" step="0.005" value="0.03">
@@ -3172,6 +3177,12 @@ def html_page() -> str:
     function finiteNumber(value, fallback = null) {{
       const n = Number(value);
       return Number.isFinite(n) ? n : fallback;
+    }}
+    function formatMs(value) {{
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 'none';
+      if (n >= 1000) return `${{(n / 1000).toFixed(2)}}s`;
+      return `${{n.toFixed(0)}}ms`;
     }}
     function pct(value, min, max) {{
       const n = finiteNumber(value, min);
@@ -4144,6 +4155,10 @@ def html_page() -> str:
       const welcomeInteraction = data.welcome_interaction || {{}};
       document.getElementById('welcomeFsmState').textContent =
         `${{welcomeInteraction.enabled ? 'active' : 'inactive'}} / ${{welcomeInteraction.current_welcome_state || 'SCANNING'}}`;
+      document.getElementById('welcomeAudioStage').textContent = welcomeInteraction.audio_stage || 'idle';
+      const welcomeLatency = welcomeInteraction.latency_metrics || {{}};
+      document.getElementById('welcomeLatency').textContent =
+        `rec ${{formatMs(welcomeLatency.recording_ms)}} / stt ${{formatMs(welcomeLatency.transcribe_wall_ms || welcomeLatency.transcribe_ms)}} / rsp ${{formatMs(welcomeLatency.response_ms)}} / tts ${{formatMs(welcomeLatency.speak_wall_ms)}}`;
       document.getElementById('welcomeFsmFlags').textContent =
         `human ${{welcomeInteraction.human_detected ? 'yes' : 'no'}} / speech ${{welcomeInteraction.speech_detected ? 'yes' : 'no'}} / transcript ${{welcomeInteraction.transcript_received ? 'yes' : 'no'}} / tts ${{welcomeInteraction.tts_finished ? 'done' : 'idle'}} / cooldown ${{welcomeInteraction.cooldown_active ? 'yes' : 'no'}}`;
       document.getElementById('welcomeFsmHuman').textContent =
@@ -4153,6 +4168,7 @@ def html_page() -> str:
         ['welcomePostTts', 'post_tts_delay'],
         ['welcomeCooldown', 'cooldown_duration'],
         ['welcomeMaxRecording', 'max_recording_time'],
+        ['welcomeSilence', 'silence_duration'],
         ['welcomeSpeechThreshold', 'speech_threshold'],
       ];
       welcomeInputs.forEach(([id, key]) => {{
@@ -4441,6 +4457,7 @@ def html_page() -> str:
           post_tts_delay: Number(document.getElementById('welcomePostTts').value),
           cooldown_duration: Number(document.getElementById('welcomeCooldown').value),
           max_recording_time: Number(document.getElementById('welcomeMaxRecording').value),
+          silence_duration: Number(document.getElementById('welcomeSilence').value),
           speech_threshold: Number(document.getElementById('welcomeSpeechThreshold').value)
         }})
       }});
