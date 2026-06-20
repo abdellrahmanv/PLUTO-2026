@@ -2235,6 +2235,7 @@ def html_page() -> str:
       min-height: 180px;
       max-height: 320px;
       overflow: auto;
+      overscroll-behavior: contain;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel-soft);
@@ -3149,6 +3150,10 @@ def html_page() -> str:
     const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     let validationCatalog = [];
     let validationLastResults = {{}};
+    const eventLogScroll = {{
+      followLatest: true,
+      threshold: 16
+    }};
     function getStoredTheme() {{
       try {{
         return localStorage.getItem(THEME_KEY) || 'auto';
@@ -3405,6 +3410,27 @@ def html_page() -> str:
       document.getElementById('eventWarnings').textContent = warningCount;
       document.getElementById('eventFaults').textContent = faultCount;
       document.getElementById('eventDepth').textContent = events.length;
+    }}
+    function renderMissionLog(events) {{
+      const root = document.getElementById('events');
+      const previousScrollTop = root.scrollTop;
+      const previousScrollHeight = root.scrollHeight;
+      const nearLatest = previousScrollTop <= eventLogScroll.threshold;
+      eventLogScroll.followLatest = eventLogScroll.followLatest && nearLatest;
+
+      root.innerHTML = events.map(item => {{
+        const t = new Date(item.timestamp * 1000).toLocaleTimeString();
+        return `<div class="event ${{cleanClass(item.level)}}"><span>${{t}}</span><span>${{esc(item.level)}}</span><span>${{esc(item.message)}}</span></div>`;
+      }}).join('');
+
+      if (eventLogScroll.followLatest || nearLatest) {{
+        root.scrollTop = 0;
+        eventLogScroll.followLatest = true;
+        return;
+      }}
+
+      const heightDelta = root.scrollHeight - previousScrollHeight;
+      root.scrollTop = Math.max(0, previousScrollTop + heightDelta);
     }}
     function renderLaunchGate(checks) {{
       const bad = checks.filter(item => item.level === 'bad').length;
@@ -3876,10 +3902,7 @@ def html_page() -> str:
           <span class="value ${{item.allowed ? 'status-good' : 'status-warn'}}">${{item.reason}}</span>
         </div>
       `).join('');
-      document.getElementById('events').innerHTML = data.events.map(item => {{
-        const t = new Date(item.timestamp * 1000).toLocaleTimeString();
-        return `<div class="event ${{cleanClass(item.level)}}"><span>${{t}}</span><span>${{esc(item.level)}}</span><span>${{esc(item.message)}}</span></div>`;
-      }}).join('');
+      renderMissionLog(data.events || []);
       renderEventSummary(data.events || []);
       document.getElementById('report').textContent = JSON.stringify(data.bootstrap_report, null, 2);
       const obstacles = stm.obstacles || {{}};
@@ -4494,6 +4517,9 @@ def html_page() -> str:
       if (!button || button.disabled) return;
       await runValidationTest(button.dataset.validationId);
     }});
+    document.getElementById('events').addEventListener('scroll', event => {{
+      eventLogScroll.followLatest = event.currentTarget.scrollTop <= eventLogScroll.threshold;
+    }}, {{passive: true}});
     loadValidationCatalog()
       .then(() => renderValidationCatalog(validationCatalog, window.lastPlutoHardware || {{}}))
       .catch(console.error);
