@@ -210,127 +210,6 @@ class AudioRuntime:
         self._set_recording(result)
         return result
 
-    def record_until_silence(
-        self,
-        max_duration_s: float = 6.0,
-        silence_duration_s: float = 2.0,
-        min_speech_duration_s: float = 0.3,
-        speech_threshold: float | None = None,
-        chunk_duration_s: float = 0.2,
-    ) -> dict[str, Any]:
-        status = self.probe_status
-        if not status.microphone_available or not status.selected_microphone:
-            result = {"ok": False, "detail": "microphone unavailable", "path": None}
-            self._set_recording(result)
-            return result
-
-        threshold = self.min_rms if speech_threshold is None else max(0.0, float(speech_threshold))
-        max_duration = max(0.5, min(float(max_duration_s), 8.0))
-        silence_limit = max(0.2, min(float(silence_duration_s), 5.0))
-        min_speech = max(0.0, min(float(min_speech_duration_s), max_duration))
-        chunk_duration = max(0.05, min(float(chunk_duration_s), 0.5))
-        bytes_per_sample = 2
-        chunk_bytes = max(512, int(self.sample_rate * self.channels * bytes_per_sample * chunk_duration))
-        chunk_bytes -= chunk_bytes % bytes_per_sample
-        path = Path(tempfile.gettempdir()) / f"pluto_listen_{int(time.time() * 1000)}.wav"
-        cmd = [
-            "arecord",
-            "-q",
-            "-D",
-            status.selected_microphone,
-            "-f",
-            "S16_LE",
-            "-r",
-            str(self.sample_rate),
-            "-c",
-            str(self.channels),
-            "-t",
-            "raw",
-        ]
-        started = time.monotonic()
-        speech_started_at: float | None = None
-        last_speech_at: float | None = None
-        speech_chunks = 0
-        chunks: list[bytes] = []
-        stop_reason = "max recording time reached"
-        proc: subprocess.Popen | None = None
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            assert proc.stdout is not None
-            while True:
-                elapsed = time.monotonic() - started
-                if elapsed >= max_duration:
-                    break
-                data = proc.stdout.read(chunk_bytes)
-                if not data:
-                    if proc.poll() is not None:
-                        stop_reason = "capture ended"
-                        break
-                    continue
-                chunks.append(data)
-                now = time.monotonic()
-                rms = pcm16_rms(data)
-                if rms >= threshold:
-                    speech_chunks += 1
-                    if speech_started_at is None:
-                        speech_started_at = now
-                    last_speech_at = now
-                if speech_started_at is not None and last_speech_at is not None:
-                    speech_elapsed = now - speech_started_at
-                    silence_elapsed = now - last_speech_at
-                    if speech_elapsed >= min_speech and silence_elapsed >= silence_limit:
-                        stop_reason = f"speech ended after {silence_limit:.1f}s silence"
-                        break
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=0.8)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-            raw = b"".join(chunks)
-            if raw:
-                with wave.open(str(path), "wb") as wav:
-                    wav.setnchannels(self.channels)
-                    wav.setsampwidth(bytes_per_sample)
-                    wav.setframerate(self.sample_rate)
-                    wav.writeframes(raw)
-            elapsed_ms = (time.monotonic() - started) * 1000.0
-            ok = path.exists() and path.stat().st_size > 44
-            signal = wav_signal_stats(path) if ok else {}
-            result = {
-                "ok": ok,
-                "detail": "recorded until silence" if ok else "recording failed",
-                "path": str(path) if path.exists() else None,
-                "duration_s": round(len(raw) / float(self.sample_rate * self.channels * bytes_per_sample), 3) if raw else 0.0,
-                "elapsed_ms": elapsed_ms,
-                "bytes": path.stat().st_size if path.exists() else 0,
-                "device": status.selected_microphone,
-                "signal": signal,
-                "mode": "until_silence",
-                "speech_threshold": threshold,
-                "speech_detected": speech_started_at is not None,
-                "speech_chunks": speech_chunks,
-                "silence_duration_s": silence_limit,
-                "min_speech_duration_s": min_speech,
-                "stopped_by": stop_reason,
-            }
-        except Exception as exc:
-            if proc and proc.poll() is None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            result = {
-                "ok": False,
-                "detail": str(exc),
-                "path": None,
-                "duration_s": max_duration,
-                "device": status.selected_microphone,
-                "mode": "until_silence",
-            }
-        self._set_recording(result)
-        return result
-
     def transcribe(self, wav_path: str | None) -> dict[str, Any]:
         if not wav_path:
             result = {"ok": False, "detail": "no recording path", "text": ""}
@@ -393,35 +272,6 @@ class AudioRuntime:
         recording = self.record(duration_s)
         transcript = self.transcribe(recording.get("path")) if recording.get("ok") else {"ok": False, "detail": recording.get("detail"), "text": ""}
         return {"ok": bool(recording.get("ok")) and bool(transcript.get("ok")), "recording": recording, "transcript": transcript}
-
-    def listen_until_silence(
-        self,
-        max_duration_s: float = 6.0,
-        silence_duration_s: float = 2.0,
-        min_speech_duration_s: float = 0.3,
-        speech_threshold: float | None = None,
-    ) -> dict[str, Any]:
-        started = time.monotonic()
-        recording = self.record_until_silence(
-            max_duration_s=max_duration_s,
-            silence_duration_s=silence_duration_s,
-            min_speech_duration_s=min_speech_duration_s,
-            speech_threshold=speech_threshold,
-        )
-        transcribe_started = time.monotonic()
-        transcript = self.transcribe(recording.get("path")) if recording.get("ok") else {"ok": False, "detail": recording.get("detail"), "text": ""}
-        return {
-            "ok": bool(recording.get("ok")) and bool(transcript.get("ok")),
-            "recording": recording,
-            "transcript": transcript,
-            "timing": {
-                "total_ms": (time.monotonic() - started) * 1000.0,
-                "recording_ms": recording.get("elapsed_ms"),
-                "transcribe_ms": transcript.get("elapsed_ms"),
-                "transcribe_wall_ms": (time.monotonic() - transcribe_started) * 1000.0,
-                "model_load_ms": transcript.get("model_load_ms"),
-            },
-        }
 
     def speak_async(self, text: str, playback_device: str | None = None) -> dict[str, Any]:
         clean_text = str(text or "").strip()
@@ -696,20 +546,6 @@ def wav_signal_stats(path: str | Path) -> dict[str, float | int]:
         return {"rms": round(rms, 6), "peak": round(peak, 6), "frames": frame_count, "channels": channels}
     except Exception:
         return {}
-
-
-def pcm16_rms(data: bytes) -> float:
-    if not data:
-        return 0.0
-    sample_bytes = data[: len(data) - (len(data) % 2)]
-    if not sample_bytes:
-        return 0.0
-    samples = array("h")
-    samples.frombytes(sample_bytes)
-    if not samples:
-        return 0.0
-    squares = sum(float(sample) * float(sample) for sample in samples)
-    return math.sqrt(squares / len(samples)) / 32768.0
 
 
 def discover_whisper_model() -> str | None:

@@ -29,8 +29,8 @@ WELCOME_STATES = (
 class WelcomeInteractionConfig:
     post_tts_delay: float = 1.0
     cooldown_duration: float = 2.0
-    max_recording_time: float = 6.0
-    silence_duration: float = 2.0
+    max_recording_time: float = 3.0
+    silence_duration: float = 1.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
     speech_threshold: float = 0.03
@@ -75,13 +75,11 @@ class WelcomeInteractionStatus:
     post_tts_active: bool = False
     interaction_timer: float = 0.0
     audio_queue: list[str] = field(default_factory=list)
-    audio_stage: str = "idle"
-    latency_metrics: dict[str, Any] = field(default_factory=dict)
     silence_duration: float = 0.0
     speech_threshold: float = 0.03
     post_tts_delay: float = 1.0
     cooldown_duration: float = 2.0
-    max_recording_time: float = 6.0
+    max_recording_time: float = 3.0
     min_speech_duration: float = 0.3
     queue_flush_duration: float = 0.15
     human_detection_confidence: float = 0.0
@@ -249,7 +247,6 @@ class WelcomeInteractionFSM:
             self._status.cooldown_active = False
             self._status.post_tts_active = False
             self._status.audio_queue = []
-            self._status.audio_stage = "scanning"
             if perception["human_detected"] and not was_human_detected and self._greet_on_human_detection:
                 self._initial_response = self._intro_text
                 self._status.initial_response_pending = True
@@ -270,7 +267,6 @@ class WelcomeInteractionFSM:
             self._status.stop_guard = stop
             self._status.audio_status = audio
             self._status.audio_queue = []
-            self._status.audio_stage = "initializing"
             self._status.interaction_timer = time.monotonic() - self._interaction_started
             initial_response = self._initial_response
             if initial_response:
@@ -296,7 +292,6 @@ class WelcomeInteractionFSM:
             return
         with self._lock:
             self._status.audio_queue = ["microphone"]
-            self._status.audio_stage = "recording"
             self._status.speech_detected = False
             self._status.transcript_received = False
             self._status.transcript = ""
@@ -305,39 +300,13 @@ class WelcomeInteractionFSM:
             self.audio_runtime.min_rms = self.config.speech_threshold
         except Exception:
             pass
-        started = time.monotonic()
-        self.log("talk", f"WELCOME listening started: max {self.config.max_recording_time:.1f}s / silence {self.config.silence_duration:.1f}s")
-        if hasattr(self.audio_runtime, "record_until_silence"):
-            recording = self.audio_runtime.record_until_silence(
-                max_duration_s=self.config.max_recording_time,
-                silence_duration_s=self.config.silence_duration,
-                min_speech_duration_s=self.config.min_speech_duration,
-                speech_threshold=self.config.speech_threshold,
-            )
-        else:
-            recording = self.audio_runtime.record(self.config.max_recording_time)
-        recording_ms = float(recording.get("elapsed_ms") or ((time.monotonic() - started) * 1000.0))
-        with self._lock:
-            self._status.audio_stage = "transcribing"
-            self._status.latency_metrics = {"recording_ms": recording_ms}
-        self.log(
-            "talk",
-            f"WELCOME recording finished in {recording_ms:.0f} ms: {recording.get('stopped_by') or recording.get('detail', 'recorded')}",
-        )
-        transcribe_started = time.monotonic()
-        transcript = self.audio_runtime.transcribe(recording.get("path")) if recording.get("ok") else {"ok": False, "detail": recording.get("detail"), "text": ""}
-        transcribe_wall_ms = (time.monotonic() - transcribe_started) * 1000.0
+        listen = self.audio_runtime.listen(self.config.max_recording_time)
+        recording = listen.get("recording") or {}
+        transcript = listen.get("transcript") or {}
         signal = recording.get("signal") or transcript.get("signal") or {}
         rms = float(signal.get("rms") or 0.0)
         text = str(transcript.get("text") or "").strip()
-        speech_detected = bool(recording.get("speech_detected")) or rms >= self.config.speech_threshold
-        latency = {
-            "recording_ms": recording_ms,
-            "transcribe_ms": transcript.get("elapsed_ms"),
-            "transcribe_wall_ms": transcribe_wall_ms,
-            "model_load_ms": transcript.get("model_load_ms"),
-            "listen_total_ms": (time.monotonic() - started) * 1000.0,
-        }
+        speech_detected = rms >= self.config.speech_threshold
         perception = self._extract_perception(self.camera_status())
         with self._lock:
             self._apply_perception_locked(perception)
@@ -345,15 +314,8 @@ class WelcomeInteractionFSM:
             self._status.speech_detected = speech_detected
             self._status.transcript_received = bool(text)
             self._status.transcript = text
-            self._status.silence_duration = self.config.silence_duration if speech_detected else 0.0
+            self._status.silence_duration = 0.0 if speech_detected else self.config.silence_duration
             self._status.audio_queue = []
-            self._status.audio_stage = "transcribed" if text else "no_transcript"
-            self._status.latency_metrics = latency
-        self.log(
-            "talk",
-            f"WELCOME transcription finished in {transcribe_wall_ms:.0f} ms: "
-            f"{'text received' if text else transcript.get('detail', 'no transcript')}",
-        )
         if not text:
             if perception["human_detected"] or self._operator_triggered:
                 self._transition("SCANNING", "silence timeout; return to detection")
@@ -364,63 +326,37 @@ class WelcomeInteractionFSM:
 
     def _generate_response(self) -> None:
         text = self.status().get("transcript", "")
-        started = time.monotonic()
-        with self._lock:
-            self._status.audio_stage = "processing_response"
-        self.log("talk", "WELCOME response processing started")
         result = self.talk_engine.answer(text)
-        response_ms = (time.monotonic() - started) * 1000.0
         response = str(getattr(result, "response", "") or "").strip()
         with self._lock:
             self._status.response_text = response
             self._status.audio_status = self.audio_runtime.status()
-            self._status.audio_stage = "response_ready" if response else "response_empty"
-            metrics = dict(self._status.latency_metrics)
-            metrics["response_ms"] = response_ms
-            self._status.latency_metrics = metrics
         if self.on_talk_result is not None:
             self.on_talk_result(result)
         if not response or not getattr(result, "accepted", False):
             self._transition("COOLDOWN", getattr(result, "reason", "empty response"))
             return
-        self.log("talk", f"WELCOME response generated in {response_ms:.1f} ms")
         self._transition("SPEAKING", "response generated")
 
     def _speak_once(self) -> None:
         response = self.status().get("response_text", "")
         with self._lock:
             self._status.audio_queue = ["tts"]
-            self._status.audio_stage = "speaking"
             self._status.tts_finished = False
-        started = time.monotonic()
-        self.log("talk", "WELCOME speech started")
         result = self.audio_runtime.speak(response)
-        speak_wall_ms = (time.monotonic() - started) * 1000.0
         with self._lock:
             self._status.audio_status = self.audio_runtime.status()
             self._status.audio_queue = []
             self._status.tts_finished = bool(result.get("ok"))
-            self._status.audio_stage = "speech_finished" if result.get("ok") else "speech_failed"
-            metrics = dict(self._status.latency_metrics)
-            metrics["tts_generate_ms"] = result.get("generate_ms")
-            metrics["tts_play_ms"] = result.get("play_ms")
-            metrics["speak_wall_ms"] = speak_wall_ms
-            self._status.latency_metrics = metrics
         if not result.get("ok"):
             self._transition("COOLDOWN", f"TTS failed: {result.get('detail', 'unknown')}")
             return
-        self.log(
-            "talk",
-            f"WELCOME speech finished in {speak_wall_ms:.0f} ms "
-            f"(generate {float(result.get('generate_ms') or 0.0):.0f} ms / play {float(result.get('play_ms') or 0.0):.0f} ms)",
-        )
         self._transition("POST_TTS_BUFFER", "TTS finished")
 
     def _post_tts_buffer(self) -> None:
         with self._lock:
             self._status.post_tts_active = True
             self._status.audio_queue = []
-            self._status.audio_stage = "post_tts_buffer"
         time.sleep(max(0.0, self.config.post_tts_delay))
         with self._lock:
             self._status.post_tts_active = False
@@ -430,7 +366,6 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._status.cooldown_active = True
             self._status.audio_queue = []
-            self._status.audio_stage = "cooldown"
         time.sleep(max(0.0, self.config.cooldown_duration))
         with self._lock:
             self._status.cooldown_active = False
@@ -475,7 +410,6 @@ class WelcomeInteractionFSM:
         self._status.post_tts_delay = self.config.post_tts_delay
         self._status.cooldown_duration = self.config.cooldown_duration
         self._status.max_recording_time = self.config.max_recording_time
-        self._status.silence_duration = self.config.silence_duration
         self._status.min_speech_duration = self.config.min_speech_duration
         self._status.queue_flush_duration = self.config.queue_flush_duration
 
