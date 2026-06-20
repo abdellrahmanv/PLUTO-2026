@@ -20,6 +20,8 @@ BASE = f"http://{HOST}:{PORT}"
 
 
 REQUIRED_FILES = [
+    "deploy/raspberry_pi/enable_pluto_booth_mode.sh",
+    "deploy/raspberry_pi/disable_pluto_booth_mode.sh",
     "deploy/raspberry_pi/install_pluto_wifi_portal.sh",
     "deploy/raspberry_pi/hostapd.conf.in",
     "deploy/raspberry_pi/dnsmasq.conf.in",
@@ -70,6 +72,17 @@ def assert_assets() -> None:
     assert "pluto-captive-portal.service" in installer
     assert "systemctl enable" in installer
     assert "--start-now" in installer
+    assert "PLUTO_DANCE_AUDIO" in installer
+
+    enable_booth = (ROOT / "deploy/raspberry_pi/enable_pluto_booth_mode.sh").read_text(encoding="utf-8")
+    assert "install_pluto_wifi_portal.sh" in enable_booth
+    assert "PLUTO booth mode is enabled" in enable_booth
+    assert "PLUTO_DANCE_AUDIO" in enable_booth
+
+    disable_booth = (ROOT / "deploy/raspberry_pi/disable_pluto_booth_mode.sh").read_text(encoding="utf-8")
+    assert "pluto-captive-portal.service" in disable_booth
+    assert "PLUTO booth mode is disabled" in disable_booth
+    assert "pluto_runtime.web_shell" in disable_booth
 
     hostapd = (ROOT / "deploy/raspberry_pi/hostapd.conf.in").read_text(encoding="utf-8")
     assert "wpa=2" in hostapd
