@@ -58,6 +58,7 @@ class CameraStatus:
     image_brightness: float = 0.0
     image_contrast: float = 0.0
     vision_quality: str = "unknown"
+    perception_mode: str = "NORMAL"
     error: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -500,6 +501,23 @@ class CameraService:
         self.stream_fps_value = 0.0
         self.last_stream_fps_time = time.monotonic()
         self.error: str | None = None
+        self.perception_mode = "NORMAL"
+
+    def set_perception_mode(self, mode: str) -> bool:
+        clean = str(mode or "NORMAL").upper()
+        if clean not in {"NORMAL", "REDUCED", "PAUSED"}:
+            clean = "NORMAL"
+        if clean == self.perception_mode:
+            return False
+        self.perception_mode = clean
+        if clean != "NORMAL":
+            self.previous_wave_rois.clear()
+            self.latest_wave_motion = {
+                "available": False,
+                "reason": f"perception_{clean.lower()}",
+                "timestamp": time.time(),
+            }
+        return True
 
     def start(self) -> bool:
         if self.running:
@@ -568,7 +586,11 @@ class CameraService:
 
             frame_index += 1
             self._update_image_quality(frame)
-            if self.detector and frame_index % self.frame_skip == 0:
+            mode = self.perception_mode
+            effective_frame_skip = self.frame_skip
+            if mode == "REDUCED":
+                effective_frame_skip = max(self.frame_skip, 4)
+            if self.detector and mode != "PAUSED" and frame_index % effective_frame_skip == 0:
                 detections = self.detector.detect(frame)
                 if warmup_remaining > 0:
                     detections = []
@@ -581,7 +603,16 @@ class CameraService:
                     self.latest_detections = []
                     self._cleanup_tracks(time.monotonic())
 
-            wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections, frame_index)
+            if mode == "NORMAL":
+                wave_motion = self._estimate_wave_motion(cv2, frame, self.latest_detections, frame_index)
+            else:
+                self.previous_wave_rois.clear()
+                wave_motion = {
+                    "available": False,
+                    "reason": f"perception_{mode.lower()}",
+                    "frame_index": frame_index,
+                    "timestamp": time.time(),
+                }
 
             annotated = frame.copy()
             self._draw_overlay(cv2, annotated, self.latest_detections, wave_motion)
@@ -1064,6 +1095,7 @@ class CameraService:
             image_brightness=self.image_brightness,
             image_contrast=self.image_contrast,
             vision_quality=self.vision_quality,
+            perception_mode=self.perception_mode,
             error=error or self.error,
             details={
                 "video_devices": list_video_devices(),
@@ -1086,6 +1118,7 @@ class CameraService:
                 "image_brightness": self.image_brightness,
                 "image_contrast": self.image_contrast,
                 "vision_quality": self.vision_quality,
+                "perception_mode": self.perception_mode,
                 "pose": pose_status,
             },
         )

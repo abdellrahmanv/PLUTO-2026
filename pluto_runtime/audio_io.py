@@ -55,6 +55,13 @@ class AudioProbe:
     packages: dict[str, bool] = field(default_factory=dict)
     stt_backend: str = "unavailable"
     stt_detail: str = "not checked"
+    stt_model_type: str = "unknown"
+    stt_compute_type: str = "unknown"
+    stt_device: str = "unknown"
+    stt_cpu_threads: int | None = None
+    stt_last_ms: float | None = None
+    stt_average_ms: float | None = None
+    stt_max_ms: float | None = None
     tts_backend: str = "unavailable"
     tts_detail: str = "not checked"
     min_rms: float = 0.03
@@ -89,6 +96,10 @@ class AudioRuntime:
         self.probe_status = AudioProbe()
         self._whisper_model = None
         self._whisper_model_path: str | None = None
+        self._whisper_device = os.environ.get("PLUTO_WHISPER_DEVICE", "cpu")
+        self._whisper_compute_type = os.environ.get("PLUTO_WHISPER_COMPUTE_TYPE", "int8")
+        self._whisper_cpu_threads = int(os.environ.get("PLUTO_WHISPER_CPU_THREADS", "2"))
+        self._transcribe_times_ms: list[float] = []
         self._play_lock = threading.RLock()
         self._play_procs: list[subprocess.Popen] = []
         self.probe()
@@ -139,6 +150,13 @@ class AudioRuntime:
             packages=packages,
             stt_backend="faster-whisper" if packages["faster_whisper"] and whisper_path else "unavailable",
             stt_detail=whisper_path or "faster-whisper model not found",
+            stt_model_type=whisper_model_type(whisper_path),
+            stt_compute_type=self._whisper_compute_type,
+            stt_device=self._whisper_device,
+            stt_cpu_threads=self._whisper_cpu_threads,
+            stt_last_ms=self._transcribe_times_ms[-1] if self._transcribe_times_ms else None,
+            stt_average_ms=(sum(self._transcribe_times_ms) / len(self._transcribe_times_ms)) if self._transcribe_times_ms else None,
+            stt_max_ms=max(self._transcribe_times_ms) if self._transcribe_times_ms else None,
             tts_backend="piper" if piper_binary and piper_model else "unavailable",
             tts_detail=f"{piper_binary} {piper_model}" if piper_binary and piper_model else "piper binary/model not found",
             min_rms=self.min_rms,
@@ -273,7 +291,13 @@ class AudioRuntime:
 
             started = time.monotonic()
             if self._whisper_model is None or self._whisper_model_path != model_path:
-                self._whisper_model = WhisperModel(model_path, device="cpu", compute_type="int8", local_files_only=True)
+                self._whisper_model = WhisperModel(
+                    model_path,
+                    device=self._whisper_device,
+                    compute_type=self._whisper_compute_type,
+                    cpu_threads=self._whisper_cpu_threads,
+                    local_files_only=True,
+                )
                 self._whisper_model_path = model_path
             load_ms = (time.monotonic() - started) * 1000.0
             started_transcribe = time.monotonic()
@@ -287,6 +311,7 @@ class AudioRuntime:
             segment_list = list(segments)
             text = " ".join(segment.text.strip() for segment in segment_list).strip()
             elapsed_ms = (time.monotonic() - started_transcribe) * 1000.0
+            self._record_transcribe_time(elapsed_ms)
             confidence = getattr(info, "language_probability", None)
             result = {
                 "ok": True,
@@ -295,6 +320,10 @@ class AudioRuntime:
                 "elapsed_ms": elapsed_ms,
                 "model_load_ms": load_ms,
                 "model": model_path,
+                "model_type": whisper_model_type(model_path),
+                "compute_type": self._whisper_compute_type,
+                "device": self._whisper_device,
+                "cpu_threads": self._whisper_cpu_threads,
                 "duration_s": getattr(info, "duration", None),
                 "confidence": confidence,
                 "segment_count": len(segment_list),
@@ -315,6 +344,14 @@ class AudioRuntime:
             }
         self._set_transcript(result)
         return result
+
+    def _record_transcribe_time(self, elapsed_ms: float) -> None:
+        with self.lock:
+            self._transcribe_times_ms.append(float(elapsed_ms))
+            self._transcribe_times_ms = self._transcribe_times_ms[-20:]
+            self.probe_status.stt_last_ms = self._transcribe_times_ms[-1]
+            self.probe_status.stt_average_ms = sum(self._transcribe_times_ms) / len(self._transcribe_times_ms)
+            self.probe_status.stt_max_ms = max(self._transcribe_times_ms)
 
     def listen(self, duration_s: float = 3.0) -> dict[str, Any]:
         listen_started_at = timestamp_now()
@@ -671,6 +708,14 @@ def discover_whisper_model() -> str | None:
         if candidate and Path(candidate, "model.bin").exists():
             return candidate
     return None
+
+
+def whisper_model_type(model_path: str | None) -> str:
+    text = str(model_path or "").lower()
+    for item in ("tiny", "base", "small", "medium", "large"):
+        if f"whisper-{item}" in text or f"faster-whisper-{item}" in text or f"--{item}" in text:
+            return item
+    return "unknown"
 
 
 def discover_piper() -> tuple[str | None, str | None]:

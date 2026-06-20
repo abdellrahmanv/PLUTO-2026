@@ -322,6 +322,7 @@ class WelcomeInteractionFSM:
         )
         listen = self.audio_runtime.listen(self.config.max_recording_time)
         listen_timing = listen.get("timing") or {}
+        audio_status = self.audio_runtime.status() or {}
         self._log_trace(
             "audio listen end",
             listen_started_at=listen_timing.get("listen_started_at"),
@@ -335,6 +336,14 @@ class WelcomeInteractionFSM:
             transcribe_latency_ms=listen_timing.get("transcribe_latency_ms"),
             transcribe_wall_latency_ms=listen_timing.get("transcribe_wall_latency_ms"),
             model_load_ms=listen_timing.get("model_load_ms"),
+            stt_backend=audio_status.get("stt_backend"),
+            stt_model_type=audio_status.get("stt_model_type"),
+            stt_model_path=audio_status.get("stt_detail"),
+            stt_compute_type=audio_status.get("stt_compute_type"),
+            stt_device=audio_status.get("stt_device"),
+            stt_cpu_threads=audio_status.get("stt_cpu_threads"),
+            stt_average_ms=audio_status.get("stt_average_ms"),
+            stt_max_ms=audio_status.get("stt_max_ms"),
         )
         recording = listen.get("recording") or {}
         transcript = listen.get("transcript") or {}
