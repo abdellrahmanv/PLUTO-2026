@@ -603,7 +603,7 @@ class PlutoWebContext:
             if result.current_state == "WELCOME":
                 self.auto_welcome_no_human_since = None
                 self.welcome_interaction.start(
-                    trigger_source=source,
+                    trigger_source="website",
                     operator_triggered=True,
                     initial_response="",
                     auto_return_to_idle=False,
