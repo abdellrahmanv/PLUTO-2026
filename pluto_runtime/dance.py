@@ -18,6 +18,7 @@ from typing import Any
 class DanceConfig:
     dry_run: bool = True
     silent_dry_run_allowed: bool = True
+    obstacle_telemetry_required: bool = False
     audio_file_path: str | None = None
     max_forward_speed: int = 12
     max_backward_speed: int = -12
@@ -239,6 +240,8 @@ class DanceDryRunPlanner:
         return self.sequence[-1]
 
     def _obstacle_status(self, stm32_runtime: dict[str, Any]) -> tuple[str, str]:
+        if not self.config.obstacle_telemetry_required:
+            return "ignored", "ultrasonic dance blocking disabled"
         obstacles = stm32_runtime.get("obstacles") if isinstance(stm32_runtime.get("obstacles"), dict) else {}
         if not obstacles:
             return "unknown", "no STM32 obstacle telemetry"

@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import platform
 import socket
 import subprocess
 import sys
 import threading
 import time
+import wave
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -30,6 +32,17 @@ from urllib.parse import urlparse
 from .audio_io import AudioRuntime
 from .camera import CameraService, CameraStatus, status_to_dict
 from .dance import DanceDryRunPlanner, DanceStatus
+from .dance_live import (
+    DISTANCE_TOLERANCE_M,
+    MAX_SPEED as DANCE_MAX_SPEED,
+    MIN_SPEED as DANCE_MIN_SPEED,
+    MIN_STEER as DANCE_MIN_STEER,
+    SAFE_OBSTACLE_DISTANCE_CM as DANCE_SAFE_OBSTACLE_DISTANCE_CM,
+    TARGET_DISTANCE_M as DANCE_TARGET_DISTANCE_M,
+    TARGET_TURN_DEG as DANCE_TARGET_TURN_DEG,
+    TURN_TOLERANCE_DEG,
+    angle_delta_deg,
+)
 from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 from .validation_center import ValidationCenter
@@ -43,6 +56,9 @@ PROJECT_NAME = "PLUTO"
 STM32_ID = "ID:STM32_MOTOR"
 UNO_ID = "ID:UNO_LCD"
 STATIC_DIR = Path(__file__).resolve().with_name("static")
+DANCE_FALLBACK_AUDIO = Path("/tmp/pluto_dance_beat.wav")
+DANCE_OPEN_LOOP_MOVE_S = 2.0
+DANCE_OPEN_LOOP_TURN_S = 1.6
 STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
@@ -128,6 +144,31 @@ class ManualRuntime:
 
 
 @dataclass
+class DanceLiveRuntime:
+    enabled: bool = False
+    active: bool = False
+    use_ultrasonic: bool = True
+    current_step: str = "idle"
+    step_index: int = 0
+    total_steps: int = 6
+    started_at: float | None = None
+    completed_at: float | None = None
+    last_update_at: float | None = None
+    last_result: dict[str, Any] = field(default_factory=dict)
+    last_error: str | None = None
+    last_command: dict[str, Any] = field(default_factory=dict)
+    measured_distance_m: float = 0.0
+    measured_turn_deg: float = 0.0
+    target_distance_m: float = DANCE_TARGET_DISTANCE_M
+    target_turn_deg: float = DANCE_TARGET_TURN_DEG
+    forward_speed: int = DANCE_MAX_SPEED
+    backward_speed: int = DANCE_MIN_SPEED
+    rotation_steer: int = DANCE_MIN_STEER
+    obstacle_stop_cm: float = DANCE_SAFE_OBSTACLE_DISTANCE_CM
+    audio_file: str | None = None
+
+
+@dataclass
 class WaveTriggerRuntime:
     enabled: bool = True
     detector_status: str = "tracked_pose_wave"
@@ -191,6 +232,9 @@ class PlutoWebContext:
         self.dance_started_at: float | None = None
         self.dance_last_stop_at = 0.0
         self.dance_audio_started = False
+        self.dance_live = DanceLiveRuntime()
+        self.dance_live_thread: threading.Thread | None = None
+        self.dance_live_stop = threading.Event()
         self.talk_engine = WelcomeTalkEngine()
         self.talk_last_result: TalkResult | None = None
         self.talk_history: deque[TalkResult] = deque(maxlen=20)
@@ -277,6 +321,7 @@ class PlutoWebContext:
         self.manual_thread_running = False
         if self.manual_thread and self.manual_thread.is_alive():
             self.manual_thread.join(timeout=1.0)
+        self.stop_live_dance("web shell stopping")
         self.stop_uno_button_monitor()
         self.welcome_interaction.stop("web shell stopping")
         self.stop_stm32_link()
@@ -508,7 +553,9 @@ class PlutoWebContext:
     def emergency_stop(self, source: str = "website") -> dict[str, Any]:
         started = time.monotonic()
         stm32 = self.hardware["stm32"]
+        self.dance_live_stop.set()
         stop = self.send_stm32_stop_safe(stm32.port)
+        self.audio_runtime.stop_playback(reason="emergency stop")
         elapsed_ms = (time.monotonic() - started) * 1000.0
 
         with self.lock:
@@ -516,6 +563,9 @@ class PlutoWebContext:
             self.manual.enabled = False
             self.manual.speed_intent = 0
             self.manual.steer_intent = 0
+            self.dance_live.active = False
+            self.dance_live.enabled = False
+            self.dance_live.current_step = "emergency_stop"
             self.log("stop", f"Emergency stop requested from {source}, serial result: {stop['detail']}")
 
         return {
@@ -600,6 +650,8 @@ class PlutoWebContext:
 
         manual_neutral: dict[str, Any] | None = None
         if result.accepted:
+            if result.previous_state == "DANCE" and result.current_state != "DANCE" and self.dance_live.active:
+                self.stop_live_dance(f"transitioned to {result.current_state}")
             if result.current_state == "MANUAL" or self.manual.enabled:
                 manual_neutral = self.update_manual_enabled(result.current_state == "MANUAL")
             self.update_perception_workload(result.current_state)
@@ -908,6 +960,305 @@ class PlutoWebContext:
         self.manual.last_result = stop
         self.log("stop", f"MANUAL stop result: neutral={neutral.get('detail')} stop={stop['detail']}")
         return {"accepted": bool(neutral.get("ok") and stop["ok"]), "speed": 0, "steer": 0, "serial": stop, "neutral": neutral}
+
+    def start_live_dance(self, use_ultrasonic: bool = False) -> dict[str, Any]:
+        if self.dance_live_thread and self.dance_live_thread.is_alive():
+            return {"accepted": False, "reason": "live dance already running", "live": asdict(self.dance_live)}
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            return {"accepted": False, "reason": "STM32 unavailable"}
+
+        audio_path = self._resolve_dance_audio_path()
+        if not audio_path:
+            return {"accepted": False, "reason": "dance audio unavailable", "audio_file": None}
+
+        if self.mode_manager.current_state == "DANCE":
+            transition = {
+                "accepted": True,
+                "reason": "already in DANCE",
+                "state": "DANCE",
+                "substate": self.mode_manager.current_substate,
+            }
+        else:
+            transition = self.request_state("DANCE", source="website_live_dance")
+            if not transition.get("accepted"):
+                return {"accepted": False, "reason": transition.get("reason", "DANCE transition rejected"), "transition": transition}
+
+        with self.lock:
+            self.dance_live = DanceLiveRuntime(
+                enabled=True,
+                active=True,
+                use_ultrasonic=bool(use_ultrasonic),
+                current_step="starting_audio",
+                started_at=time.time(),
+                last_update_at=time.time(),
+                audio_file=audio_path,
+            )
+            self.dance_live_stop.clear()
+        self.dance_live_thread = threading.Thread(target=self._live_dance_worker, name="pluto-live-dance", daemon=True)
+        self.dance_live_thread.start()
+        self.log("pass", f"Live DANCE started ({'careful' if use_ultrasonic else 'free'})")
+        return {"accepted": True, "transition": transition, "live": asdict(self.dance_live)}
+
+    def _resolve_dance_audio_path(self) -> str | None:
+        configured = self.dance_planner.config.audio_file_path
+        if configured and Path(configured).exists():
+            return configured
+        try:
+            return str(self._ensure_fallback_dance_audio())
+        except Exception as exc:
+            self.log("warn", f"DANCE fallback audio unavailable: {exc}")
+            return None
+
+    def _ensure_fallback_dance_audio(self) -> Path:
+        if DANCE_FALLBACK_AUDIO.exists() and DANCE_FALLBACK_AUDIO.stat().st_size > 1024:
+            return DANCE_FALLBACK_AUDIO
+        sample_rate = 22050
+        duration_s = 28
+        beat_hz = 2.0
+        with wave.open(str(DANCE_FALLBACK_AUDIO), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            frames = bytearray()
+            total_samples = int(sample_rate * duration_s)
+            for i in range(total_samples):
+                t = i / sample_rate
+                beat_phase = (t * beat_hz) % 1.0
+                envelope = 1.0 if beat_phase < 0.09 else 0.22
+                tone = math.sin(2.0 * math.pi * 220.0 * t) + 0.35 * math.sin(2.0 * math.pi * 440.0 * t)
+                value = int(max(-1.0, min(1.0, tone * envelope * 0.38)) * 32767)
+                frames.extend(int(value).to_bytes(2, byteorder="little", signed=True))
+            wav.writeframes(bytes(frames))
+        return DANCE_FALLBACK_AUDIO
+
+    def stop_live_dance(self, reason: str = "operator stop") -> dict[str, Any]:
+        self.dance_live_stop.set()
+        if self.dance_live_thread and self.dance_live_thread.is_alive():
+            self.dance_live_thread.join(timeout=1.5)
+        stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
+        self.audio_runtime.stop_playback(reason=reason)
+        with self.lock:
+            self.dance_live.active = False
+            self.dance_live.enabled = False
+            self.dance_live.current_step = "stopped"
+            self.dance_live.last_update_at = time.time()
+            self.dance_live.last_result = {"ok": bool(stop.get("ok")), "detail": reason, "stop": stop}
+        self.log("stop", f"Live DANCE stopped: {reason}")
+        return {"accepted": True, "reason": reason, "stop": stop, "live": asdict(self.dance_live)}
+
+    def _live_dance_worker(self) -> None:
+        try:
+            audio_file = self.dance_live.audio_file
+            if not audio_file:
+                raise RuntimeError("dance audio file missing")
+            play = self.audio_runtime.play_file_async(audio_file)
+            if not play.get("ok"):
+                raise RuntimeError(str(play.get("detail") or "audio playback failed"))
+            self.dance_audio_started = True
+            self._set_live_dance_step("forward_1", 1)
+            self._live_move_distance(direction=1, speed=DANCE_MAX_SPEED, label="forward_1")
+            self._set_live_dance_step("backward_1", 2)
+            self._live_move_distance(direction=-1, speed=DANCE_MIN_SPEED, label="backward_1")
+            self._set_live_dance_step("rotate_1", 3)
+            self._live_rotate_180(label="rotate_1")
+            self._set_live_dance_step("forward_2", 4)
+            self._live_move_distance(direction=1, speed=DANCE_MAX_SPEED, label="forward_2")
+            self._set_live_dance_step("backward_2", 5)
+            self._live_move_distance(direction=-1, speed=DANCE_MIN_SPEED, label="backward_2")
+            self._set_live_dance_step("rotate_2", 6)
+            self._live_rotate_180(label="rotate_2")
+            self.send_stm32_stop_safe(self.hardware["stm32"].port)
+            with self.lock:
+                self.dance_live.active = False
+                self.dance_live.enabled = False
+                self.dance_live.current_step = "complete"
+                self.dance_live.completed_at = time.time()
+                self.dance_live.last_update_at = time.time()
+                self.dance_live.last_result = {"ok": True, "detail": "live dance complete"}
+            self.log("pass", "Live DANCE completed")
+            self.request_state("IDLE", source="dance_live_complete")
+        except Exception as exc:
+            self.send_stm32_stop_safe(self.hardware["stm32"].port)
+            with self.lock:
+                self.dance_live.active = False
+                self.dance_live.enabled = False
+                self.dance_live.last_error = str(exc)
+                self.dance_live.current_step = "error"
+                self.dance_live.last_update_at = time.time()
+                self.dance_live.last_result = {"ok": False, "detail": str(exc)}
+            self.log("error", f"Live DANCE stopped: {exc}")
+            self.mode_manager.enter_error(f"Live DANCE failed: {exc}", source="dance_live")
+
+    def _set_live_dance_step(self, step: str, index: int) -> None:
+        with self.lock:
+            self.dance_live.current_step = step
+            self.dance_live.step_index = index
+            self.dance_live.last_update_at = time.time()
+
+    def _live_move_distance(self, direction: int, speed: int, label: str) -> None:
+        start_distance = self._live_distance_m_or_none()
+        start_heading = self._live_heading_deg_or_none()
+        if start_distance is None:
+            self._live_move_timed(direction, speed, label)
+            return
+        started = time.monotonic()
+        target = DANCE_TARGET_DISTANCE_M
+        while not self.dance_live_stop.is_set():
+            current_distance = self._live_distance_m_or_none()
+            moved = abs(current_distance - start_distance) if current_distance is not None else 0.0
+            if moved >= target - DISTANCE_TOLERANCE_M:
+                break
+            if time.monotonic() - started > 14.0:
+                raise TimeoutError(f"{label} timed out before reaching 2m")
+            self._raise_if_live_obstacle()
+            current_heading = self._live_heading_deg_or_none()
+            heading_error = angle_delta_deg(start_heading, current_heading) if start_heading is not None and current_heading is not None else 0.0
+            correction = max(-20, min(20, int(round(heading_error * 1.2))))
+            command_speed = direction * abs(speed)
+            command_steer = -correction
+            result = self._send_live_drive(command_speed, command_steer)
+            with self.lock:
+                self.dance_live.measured_distance_m = moved
+                self.dance_live.last_command = {"speed": command_speed, "steer": command_steer, "serial": result}
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
+    def _live_move_timed(self, direction: int, speed: int, label: str) -> None:
+        started = time.monotonic()
+        while not self.dance_live_stop.is_set() and time.monotonic() - started < DANCE_OPEN_LOOP_MOVE_S:
+            self._raise_if_live_obstacle()
+            command_speed = direction * abs(speed)
+            result = self._send_live_drive(command_speed, 0)
+            elapsed = time.monotonic() - started
+            with self.lock:
+                self.dance_live.measured_distance_m = elapsed / max(0.1, DANCE_OPEN_LOOP_MOVE_S) * DANCE_TARGET_DISTANCE_M
+                self.dance_live.last_command = {
+                    "speed": command_speed,
+                    "steer": 0,
+                    "serial": result,
+                    "fallback": "timed_open_loop",
+                    "label": label,
+                }
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
+    def _live_rotate_180(self, label: str) -> None:
+        start_heading = self._live_heading_deg_or_none()
+        if start_heading is None:
+            self._live_rotate_timed(label)
+            return
+        start_ticks = self._live_drive_ack_count()
+        started = time.monotonic()
+        while not self.dance_live_stop.is_set():
+            current_heading = self._live_heading_deg_or_none()
+            turned = abs(angle_delta_deg(start_heading, current_heading)) if current_heading is not None else 0.0
+            if turned >= DANCE_TARGET_TURN_DEG - TURN_TOLERANCE_DEG:
+                break
+            if time.monotonic() - started > 10.0:
+                raise TimeoutError(f"{label} timed out before reaching 180 degrees")
+            result = self._send_live_drive(0, DANCE_MIN_STEER)
+            with self.lock:
+                self.dance_live.measured_turn_deg = turned
+                self.dance_live.last_command = {"speed": 0, "steer": DANCE_MIN_STEER, "serial": result}
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        if self._live_drive_ack_count() <= start_ticks:
+            raise RuntimeError(f"{label} failed validation: no drive ACK movement evidence")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
+    def _live_rotate_timed(self, label: str) -> None:
+        start_ticks = self._live_drive_ack_count()
+        started = time.monotonic()
+        while not self.dance_live_stop.is_set() and time.monotonic() - started < DANCE_OPEN_LOOP_TURN_S:
+            result = self._send_live_drive(0, DANCE_MIN_STEER)
+            elapsed = time.monotonic() - started
+            with self.lock:
+                self.dance_live.measured_turn_deg = elapsed / max(0.1, DANCE_OPEN_LOOP_TURN_S) * DANCE_TARGET_TURN_DEG
+                self.dance_live.last_command = {
+                    "speed": 0,
+                    "steer": DANCE_MIN_STEER,
+                    "serial": result,
+                    "fallback": "timed_open_loop",
+                    "label": label,
+                }
+                self.dance_live.last_update_at = time.time()
+            time.sleep(0.05)
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
+        if self._live_drive_ack_count() <= start_ticks:
+            raise RuntimeError(f"{label} failed validation: no drive ACK movement evidence")
+        self.send_stm32_stop_safe(self.hardware["stm32"].port)
+
+    def _send_live_drive(self, speed: int, steer: int) -> dict[str, Any]:
+        if self.stm32_link is None or not self.hardware["stm32"].connected:
+            raise RuntimeError("STM32 unavailable during live dance")
+        result = self.stm32_link.send_drive(int(speed), int(steer), wait_ack=False)
+        if not result.get("ok"):
+            raise RuntimeError(str(result.get("detail") or "drive command failed"))
+        return result
+
+    def _live_distance_m_or_none(self) -> float | None:
+        try:
+            return self._live_distance_m()
+        except Exception:
+            return None
+
+    def _live_distance_m(self) -> float:
+        if self.stm32_link is None:
+            raise RuntimeError("STM32 unavailable during live dance")
+        telemetry = self.stm32_link.get_status().telemetry
+        value = telemetry.get("DIST") if telemetry else None
+        if value is None:
+            raise RuntimeError("encoder distance telemetry DIST missing")
+        return float(value) / 100.0
+
+    def _live_heading_deg_or_none(self) -> float | None:
+        try:
+            return self._live_heading_deg()
+        except Exception:
+            return None
+
+    def _live_heading_deg(self) -> float:
+        if self.stm32_link is None:
+            raise RuntimeError("STM32 unavailable during live dance")
+        status = self.stm32_link.get_status()
+        orientation = status.imu_orientation or {}
+        if orientation.get("available") and orientation.get("yaw") is not None:
+            return float(orientation["yaw"])
+        telemetry = status.telemetry or {}
+        if telemetry.get("H") is not None:
+            return float(telemetry["H"]) * 180.0 / 3.141592653589793
+        raise RuntimeError("IMU yaw or heading telemetry missing")
+
+    def _live_drive_ack_count(self) -> int:
+        if self.stm32_link is None:
+            return 0
+        return int(self.stm32_link.get_status().ack_drive_count)
+
+    def _raise_if_live_obstacle(self) -> None:
+        if not self.dance_live.use_ultrasonic or self.stm32_link is None:
+            return
+        obstacles = self.stm32_link.get_status().obstacles or {}
+        values = []
+        for key in ("F", "FL", "FR"):
+            try:
+                values.append((key, float(obstacles[key])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not values:
+            raise RuntimeError("careful dance requires ultrasonic obstacle telemetry")
+        blocked = [(key, cm) for key, cm in values if cm < self.dance_live.obstacle_stop_cm]
+        if blocked:
+            key, cm = min(blocked, key=lambda item: item[1])
+            raise RuntimeError(f"careful dance obstacle {key} at {cm:.0f}cm")
 
     def audio_status(self) -> dict[str, Any]:
         return self.audio_runtime.status()
@@ -1272,8 +1623,10 @@ class PlutoWebContext:
                 self.dance_started_at = time.time()
                 self.dance_audio_started = False
             if self.mode_manager.current_substate == "DANCE_READY":
-                self.mode_manager.set_substate("DANCE_DRY_RUN", return_lock=False)
+                self.mode_manager.set_substate("DANCE_LIVE" if self.dance_live.active else "DANCE_DRY_RUN", return_lock=False)
         else:
+            if self.dance_live.active:
+                self.stop_live_dance(f"DANCE exited to {self.mode_manager.current_state}")
             if self.dance_audio_started:
                 self.audio_runtime.stop_playback(reason="DANCE exited")
                 self.log("info", "DANCE audio stopped")
@@ -1289,7 +1642,23 @@ class PlutoWebContext:
             dance_started_at=self.dance_started_at,
         )
 
-        if status.active:
+        if status.active and self.dance_live.active:
+            status.dry_run = False
+            status.phase = "dance_live"
+            status.audio_file = self.dance_live.audio_file
+            status.audio_file_present = bool(self.dance_live.audio_file and Path(self.dance_live.audio_file).exists())
+            status.audio_status = "playing" if self.dance_audio_started else "starting"
+            status.dance_step = self.dance_live.current_step
+            status.proposed_motion = "live_sequence"
+            status.proposed_speed = int((self.dance_live.last_command or {}).get("speed") or 0)
+            status.proposed_steer = int((self.dance_live.last_command or {}).get("steer") or 0)
+            status.reason = self.dance_live.last_error or (
+                "live dance running with ultrasonic careful mode"
+                if self.dance_live.use_ultrasonic
+                else "live dance running in free mode"
+            )
+            status.stop_guard = {"ok": True, "detail": "live dance owns motor commands", "degraded": False}
+        elif status.active:
             if not self.dance_audio_started and status.audio_status == "ready" and status.audio_file:
                 play = self.audio_runtime.play_file_async(status.audio_file)
                 self.dance_audio_started = bool(play.get("ok"))
@@ -1318,7 +1687,9 @@ class PlutoWebContext:
                 status.stop_guard = {"ok": True, "detail": "recent STOP guard still valid", "degraded": False}
 
         self.dance_status = status
-        return status.to_dict()
+        payload = status.to_dict()
+        payload["live"] = asdict(self.dance_live)
+        return payload
 
     def process_idle_wave_trigger(self) -> None:
         if self.mode_manager.current_state != "IDLE" or not self.wave.enabled:
@@ -3050,8 +3421,13 @@ def html_page() -> str:
           </div>
         </div>
         <div class="stageBox"><canvas id="danceStage" width="360" height="360"></canvas></div>
+        <div class="manual-control-row" style="margin-top: 12px;">
+          <label for="danceUseUltrasonic">Ultrasonic careful</label>
+          <input id="danceUseUltrasonic" type="checkbox">
+          <span id="danceCarefulValue">free</span>
+        </div>
         <div class="actions" style="margin-top: 12px;">
-          <button class="primary" id="danceStart">Start Dance Dry Run</button>
+          <button class="primary" id="danceStart">Start Live Dance</button>
           <button id="danceStopBtn">Stop Dance</button>
         </div>
       </section>
@@ -4160,15 +4536,18 @@ def html_page() -> str:
       armSteps.disabled = !manual.enabled;
       armSpeed.disabled = !manual.enabled;
       const dance = data.dance || {{}};
+      const danceLive = dance.live || {{}};
       const danceStop = dance.stop_guard || {{}};
       document.getElementById('danceMode').textContent =
-        `${{dance.active ? 'active' : 'inactive'}} / ${{dance.dry_run ? 'dry-run' : 'live'}} / ${{(dance.elapsed_s || 0).toFixed(1)}}s`;
+        `${{dance.active ? 'active' : 'inactive'}} / ${{danceLive.active ? 'live' : (dance.dry_run ? 'dry-run' : 'live-ready')}} / ${{(dance.elapsed_s || 0).toFixed(1)}}s`;
       document.getElementById('danceAudio').textContent =
         `${{dance.audio_status || 'unknown'}} / speaker ${{dance.speaker_available ? 'ok' : 'no'}} / file ${{dance.audio_file_present ? 'ok' : 'missing'}}`;
       const dancePlayback = (data.audio || {{}}).last_playback || {{}};
       document.getElementById('dancePlayback').textContent =
         dancePlayback.detail ? `${{dancePlayback.ok ? 'ok' : 'fail'}} / ${{dancePlayback.detail}}` : 'none';
-      document.getElementById('danceStep').textContent = dance.dance_step || 'idle';
+      document.getElementById('danceStep').textContent = danceLive.active
+        ? `${{danceLive.current_step || 'live'}} ${{danceLive.step_index || 0}}/${{danceLive.total_steps || 6}}`
+        : (dance.dance_step || 'idle');
       document.getElementById('danceObstacles').textContent = dance.obstacle_status || 'unknown';
       document.getElementById('danceVision').textContent =
         `${{dance.vision_status || 'unknown'}} / ${{dance.vision_reason || 'not evaluated'}}`;
@@ -4183,6 +4562,10 @@ def html_page() -> str:
       document.getElementById('danceReason').textContent = dance.reason || 'not evaluated';
       document.getElementById('danceStop').textContent =
         danceStop.detail ? `${{danceStop.ok ? 'ok' : 'fail'}} / ${{danceStop.detail}}` : 'none';
+      const danceCareful = document.getElementById('danceUseUltrasonic');
+      document.getElementById('danceCarefulValue').textContent = danceCareful.checked ? 'careful' : 'free';
+      danceCareful.disabled = !!danceLive.active;
+      document.getElementById('danceStart').disabled = !!danceLive.active;
       document.getElementById('danceMapSubtitle').textContent =
         `${{dance.envelope_size_cm || 0}} cm envelope / margin ${{dance.envelope_margin_cm == null ? 'unknown' : dance.envelope_margin_cm.toFixed(0) + ' cm'}} / ${{dance.direction_safety || 'direction unknown'}}`;
       drawDanceStage(dance);
@@ -4392,20 +4775,25 @@ def html_page() -> str:
       await manualStop();
     }});
     document.getElementById('danceStart').addEventListener('click', async () => {{
-      await api('/api/request-state', {{
+      await api('/api/dance/start-live', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{state: 'DANCE'}})
+        body: JSON.stringify({{use_ultrasonic: document.getElementById('danceUseUltrasonic').checked}})
       }});
       await refresh();
     }});
     document.getElementById('danceStopBtn').addEventListener('click', async () => {{
+      await api('/api/dance/stop-live', {{method: 'POST'}});
       await api('/api/request-state', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{state: 'IDLE'}})
       }});
       await refresh();
+    }});
+    document.getElementById('danceUseUltrasonic').addEventListener('change', () => {{
+      document.getElementById('danceCarefulValue').textContent =
+        document.getElementById('danceUseUltrasonic').checked ? 'careful' : 'free';
     }});
     async function submitTalk(speak) {{
       const input = document.getElementById('talkInput');
@@ -5046,6 +5434,13 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
                         bool(body.get("reset_fault", False)),
                     ),
                 )
+                return
+            if path == "/api/dance/start-live":
+                body = self.read_json()
+                self.send_json(HTTPStatus.OK, self.context.start_live_dance(bool(body.get("use_ultrasonic", True))))
+                return
+            if path == "/api/dance/stop-live":
+                self.send_json(HTTPStatus.OK, self.context.stop_live_dance("website stop"))
                 return
             if path == "/api/welcome/wave-trigger":
                 body = self.read_json()

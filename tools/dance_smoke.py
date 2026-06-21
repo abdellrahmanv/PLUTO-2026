@@ -48,7 +48,7 @@ def main() -> int:
     assert active.active is True
     assert active.dry_run is True
     assert active.audio_status == "silent_dry_run"
-    assert active.obstacle_status == "clear"
+    assert active.obstacle_status == "ignored"
     assert active.envelope_size_cm == 300
     assert active.vertical_clearance_cm == 300
     assert active.odometry_status == "simulated_dry_run"
@@ -58,11 +58,11 @@ def main() -> int:
     assert active.stage_assumption == "operator_verified_empty_3m_stage"
     assert active.proposed_motion in {"stop", "glide_backward", "glide_forward", "turn_90_right", "arm_sway"}
 
-    blocked = planner.compute(camera(), stm32(front=55), audio(), "DANCE", "DANCE_DRY_RUN", started)
+    blocked = DanceDryRunPlanner(DanceConfig(obstacle_telemetry_required=True)).compute(camera(), stm32(front=55), audio(), "DANCE", "DANCE_DRY_RUN", started)
     assert blocked.proposed_motion == "stop"
     assert blocked.obstacle_status == "blocked"
 
-    slow = planner.compute(camera(), stm32(front=85), audio(), "DANCE", "DANCE_DRY_RUN", started)
+    slow = DanceDryRunPlanner(DanceConfig(obstacle_telemetry_required=True)).compute(camera(), stm32(front=85), audio(), "DANCE", "DANCE_DRY_RUN", started)
     assert slow.obstacle_status == "slow"
     assert abs(slow.proposed_speed) <= 6
 
