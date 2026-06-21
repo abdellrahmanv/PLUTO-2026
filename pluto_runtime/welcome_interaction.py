@@ -78,6 +78,8 @@ class WelcomeInteractionStatus:
     post_tts_active: bool = False
     interaction_timer: float = 0.0
     audio_queue: list[str] = field(default_factory=list)
+    audio_stage: str = "idle"
+    latency_metrics: dict[str, Any] = field(default_factory=dict)
     silence_duration: float = 0.0
     speech_threshold: float = 0.03
     post_tts_delay: float = 1.0
@@ -238,7 +240,8 @@ class WelcomeInteractionFSM:
                     self._transition("SCANNING", "unknown WELCOME state")
             except Exception as exc:  # noqa: BLE001 - FSM must report and recover
                 self._transition("COOLDOWN", f"WELCOME interaction error: {type(exc).__name__}: {exc}")
-            time.sleep(max(0.02, self.config.scan_period))
+            sleep_s = self.config.scan_period if state == "SCANNING" else 0.02
+            time.sleep(max(0.02, sleep_s))
 
     def _scan_once(self) -> None:
         camera = self.camera_status()
@@ -253,6 +256,7 @@ class WelcomeInteractionFSM:
             self._status.cooldown_active = False
             self._status.post_tts_active = False
             self._status.audio_queue = []
+            self._status.audio_stage = "scanning"
             if perception["human_detected"] and not was_human_detected and self._greet_on_human_detection:
                 self._initial_response = self._intro_text
                 self._status.initial_response_pending = True
@@ -275,6 +279,7 @@ class WelcomeInteractionFSM:
             self._status.stop_guard = stop
             self._status.audio_status = audio
             self._status.audio_queue = []
+            self._status.audio_stage = "initializing"
             self._status.interaction_timer = time.monotonic() - self._interaction_started
             initial_response = self._initial_response
             if initial_response:
@@ -306,6 +311,7 @@ class WelcomeInteractionFSM:
             )
         with self._lock:
             self._status.audio_queue = ["microphone"]
+            self._status.audio_stage = "listening"
             self._status.speech_detected = False
             self._status.transcript_received = False
             self._status.transcript = ""
@@ -314,13 +320,16 @@ class WelcomeInteractionFSM:
             self.audio_runtime.min_rms = self.config.speech_threshold
         except Exception:
             pass
+        listen_started = time.monotonic()
         self._log_trace(
             "audio listen start",
             current_welcome_state=self.status().get("current_welcome_state"),
             max_recording_time_s=self.config.max_recording_time,
             selected_microphone=(self.audio_runtime.status() or {}).get("selected_microphone"),
         )
+        self.log("talk", f"WELCOME listening started: fixed window {self.config.max_recording_time:.1f}s")
         listen = self.audio_runtime.listen(self.config.max_recording_time)
+        listen_ms = (time.monotonic() - listen_started) * 1000.0
         listen_timing = listen.get("timing") or {}
         audio_status = self.audio_runtime.status() or {}
         self._log_trace(
@@ -362,6 +371,12 @@ class WelcomeInteractionFSM:
             audio_peak=signal.get("peak"),
         )
         speech_detected = rms >= self.config.speech_threshold
+        latency = {
+            "listen_total_ms": listen_ms,
+            "recording_ms": recording.get("elapsed_ms"),
+            "transcribe_ms": transcript.get("elapsed_ms"),
+            "model_load_ms": transcript.get("model_load_ms"),
+        }
         perception = self._extract_perception(self.camera_status())
         with self._lock:
             self._apply_perception_locked(perception)
@@ -371,6 +386,13 @@ class WelcomeInteractionFSM:
             self._status.transcript = text
             self._status.silence_duration = 0.0 if speech_detected else self.config.silence_duration
             self._status.audio_queue = []
+            self._status.audio_stage = "transcript_ready" if text else "no_transcript"
+            self._status.latency_metrics = latency
+        self.log(
+            "talk",
+            f"WELCOME listening finished in {listen_ms:.0f} ms "
+            f"(record {float(recording.get('elapsed_ms') or 0.0):.0f} ms / stt {float(transcript.get('elapsed_ms') or 0.0):.0f} ms)",
+        )
         if not text:
             if perception["human_detected"] or self._operator_triggered:
                 self._transition("SCANNING", "silence timeout; return to detection")
@@ -381,8 +403,13 @@ class WelcomeInteractionFSM:
 
     def _generate_response(self) -> None:
         text = self.status().get("transcript", "")
+        started = time.monotonic()
+        with self._lock:
+            self._status.audio_stage = "processing_response"
+        self.log("talk", "WELCOME response processing started")
         self._log_trace("talk_engine.answer start", transcript_text=text, transcript_word_count=len(str(text).split()) if text else 0)
         result = self.talk_engine.answer(text)
+        response_ms = (time.monotonic() - started) * 1000.0
         unknown_response = str(getattr(getattr(self.talk_engine, "config", None), "unknown_response", ""))
         fallback_used = getattr(result, "response_source", "") == "fallback" or str(getattr(result, "response", "")) == unknown_response
         ollama_enabled = bool(getattr(getattr(self.talk_engine, "config", None), "enable_ollama_fallback", False))
@@ -403,6 +430,10 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._status.response_text = response
             self._status.audio_status = self.audio_runtime.status()
+            self._status.audio_stage = "response_ready" if response else "response_empty"
+            metrics = dict(self._status.latency_metrics)
+            metrics["response_ms"] = response_ms
+            self._status.latency_metrics = metrics
         if self.on_talk_result is not None:
             callback_started = time.monotonic()
             self._log_trace("on_talk_result start", intent=getattr(result, "intent", None), reason=getattr(result, "reason", ""))
@@ -416,15 +447,20 @@ class WelcomeInteractionFSM:
         if not response or not getattr(result, "accepted", False):
             self._transition("COOLDOWN", getattr(result, "reason", "empty response"))
             return
+        self.log("talk", f"WELCOME response generated in {response_ms:.1f} ms")
         self._transition("SPEAKING", "response generated")
 
     def _speak_once(self) -> None:
         response = self.status().get("response_text", "")
         with self._lock:
             self._status.audio_queue = ["tts"]
+            self._status.audio_stage = "speaking"
             self._status.tts_finished = False
+        started = time.monotonic()
+        self.log("talk", "WELCOME speech started")
         self._log_trace("TTS preparation start", response_text=response, response_word_count=len(str(response).split()) if response else 0)
         result = self.audio_runtime.speak(response)
+        speak_ms = (time.monotonic() - started) * 1000.0
         self._log_trace(
             "TTS finished",
             tts_ok=bool(result.get("ok")),
@@ -456,15 +492,27 @@ class WelcomeInteractionFSM:
             self._status.audio_status = self.audio_runtime.status()
             self._status.audio_queue = []
             self._status.tts_finished = bool(result.get("ok"))
+            self._status.audio_stage = "speech_finished" if result.get("ok") else "speech_failed"
+            metrics = dict(self._status.latency_metrics)
+            metrics["tts_generate_ms"] = result.get("generate_ms")
+            metrics["tts_play_ms"] = result.get("play_ms")
+            metrics["speak_wall_ms"] = speak_ms
+            self._status.latency_metrics = metrics
         if not result.get("ok"):
             self._transition("COOLDOWN", f"TTS failed: {result.get('detail', 'unknown')}")
             return
+        self.log(
+            "talk",
+            f"WELCOME speech finished in {speak_ms:.0f} ms "
+            f"(generate {float(result.get('generate_ms') or 0.0):.0f} ms / play {float(result.get('play_ms') or 0.0):.0f} ms)",
+        )
         self._transition("POST_TTS_BUFFER", "TTS finished")
 
     def _post_tts_buffer(self) -> None:
         with self._lock:
             self._status.post_tts_active = True
             self._status.audio_queue = []
+            self._status.audio_stage = "post_tts_buffer"
         time.sleep(max(0.0, self.config.post_tts_delay))
         with self._lock:
             self._status.post_tts_active = False
@@ -474,6 +522,7 @@ class WelcomeInteractionFSM:
         with self._lock:
             self._status.cooldown_active = True
             self._status.audio_queue = []
+            self._status.audio_stage = "cooldown"
         time.sleep(max(0.0, self.config.cooldown_duration))
         with self._lock:
             self._status.cooldown_active = False
@@ -527,6 +576,7 @@ class WelcomeInteractionFSM:
         self._status.post_tts_delay = self.config.post_tts_delay
         self._status.cooldown_duration = self.config.cooldown_duration
         self._status.max_recording_time = self.config.max_recording_time
+        self._status.silence_duration = self.config.silence_duration
         self._status.min_speech_duration = self.config.min_speech_duration
         self._status.queue_flush_duration = self.config.queue_flush_duration
         self._status.human_detection_grace_duration = self.config.human_detection_grace_duration
