@@ -206,6 +206,7 @@ class PlutoWebContext:
         wave_pose_max_tracks: int = 2,
         microphone_device: str | None = None,
         speaker_device: str | None = None,
+        fast_start: bool = False,
     ) -> None:
         self.serial_baud = serial_baud
         self.lock = threading.RLock()
@@ -221,6 +222,7 @@ class PlutoWebContext:
         self.wave_thread: threading.Thread | None = None
         self.manual_thread_running = True
         self.manual_thread: threading.Thread | None = None
+        self.startup_thread: threading.Thread | None = None
         self.uno_thread_running = False
         self.uno_thread: threading.Thread | None = None
         self.uno_port: str | None = None
@@ -244,6 +246,9 @@ class PlutoWebContext:
         self.validation_center = ValidationCenter()
         self.last_alert_escalated: str | None = None
         self.git_commit = read_git_commit()
+        self.camera_disabled = camera_disabled
+        self.camera_resolution = camera_resolution
+        self.camera_frame_skip = camera_frame_skip
         self.hardware = {
             "stm32": HardwareDevice("STM32 motor safety controller", True),
             "uno": HardwareDevice("Uno LCD face controller", False),
@@ -266,22 +271,6 @@ class PlutoWebContext:
             pose_frame_skip=wave_pose_frame_skip,
             pose_max_tracks=wave_pose_max_tracks,
         )
-        if camera_disabled:
-            self.camera_service.status = CameraStatus(
-                available=False,
-                running=False,
-                configured_resolution=[camera_resolution[0], camera_resolution[1]],
-                frame_skip=max(1, camera_frame_skip),
-                detector_status="disabled",
-                pose_status="disabled",
-                error="camera disabled by operator",
-                details={"reason": "camera disabled by --camera-disabled"},
-            )
-            self.log("warn", "Camera service disabled by operator")
-        elif self.camera_service.start():
-            self.log("pass", "Camera service started")
-        else:
-            self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
         self.camera_perception_mode = "NORMAL"
         self.welcome_interaction = WelcomeInteractionFSM(
             camera_status=lambda: status_to_dict(self.camera_service.get_status()),
@@ -292,13 +281,56 @@ class PlutoWebContext:
             log=self.log,
             on_talk_result=self.record_welcome_talk_result,
         )
-        self.refresh_hardware()
         self.start_wave_monitor()
         self.start_manual_drive_repeater()
+        if fast_start:
+            self.bootstrap_report = {
+                "phase": "fast startup",
+                "status": "serving website while camera, audio, and serial hardware initialize in background",
+            }
+            self.log("info", "Fast start enabled: website binds before camera/audio/serial probes finish")
+            self.start_deferred_startup()
+        else:
+            self.start_camera_service()
+            self.refresh_hardware()
 
     def log(self, level: str, message: str) -> None:
         with self.lock:
             self.events.appendleft(Event(time.time(), level, message))
+
+    def start_deferred_startup(self) -> None:
+        if self.startup_thread and self.startup_thread.is_alive():
+            return
+        self.startup_thread = threading.Thread(target=self._deferred_startup_loop, name="pluto-fast-start", daemon=True)
+        self.startup_thread.start()
+
+    def _deferred_startup_loop(self) -> None:
+        try:
+            self.start_camera_service()
+        except Exception as exc:
+            self.log("warn", f"Deferred camera startup failed: {exc}")
+        try:
+            self.refresh_hardware()
+        except Exception as exc:
+            self.log("error", f"Deferred hardware refresh failed: {exc}")
+
+    def start_camera_service(self) -> None:
+        if self.camera_disabled:
+            self.camera_service.status = CameraStatus(
+                available=False,
+                running=False,
+                configured_resolution=[self.camera_resolution[0], self.camera_resolution[1]],
+                frame_skip=max(1, self.camera_frame_skip),
+                detector_status="disabled",
+                pose_status="disabled",
+                error="camera disabled by operator",
+                details={"reason": "camera disabled by --camera-disabled"},
+            )
+            self.log("warn", "Camera service disabled by operator")
+        elif self.camera_service.start():
+            self.log("pass", "Camera service started")
+        else:
+            self.log("warn", f"Camera unavailable: {self.camera_service.get_status().error}")
 
     def start_wave_monitor(self) -> None:
         if self.wave_thread and self.wave_thread.is_alive():
@@ -327,6 +359,8 @@ class PlutoWebContext:
         self.stop_stm32_link()
         self.audio_runtime.stop_playback(reason="web shell stopping")
         self.camera_service.stop()
+        if self.startup_thread and self.startup_thread.is_alive():
+            self.startup_thread.join(timeout=1.0)
 
     def _wave_monitor_loop(self) -> None:
         period_s = 1.0 / max(1.0, self.wave.sample_hz)
@@ -4930,6 +4964,214 @@ def html_page() -> str:
 </html>"""
 
 
+def lite_page() -> str:
+    states = "".join(f'<button class="state" data-state="{state}">{state}</button>' for state in VALID_STATES)
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PLUTO Lite Console</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #101820; color: #f4fbff; font-family: Arial, sans-serif; }
+    body { padding: 12px; }
+    header, section { border: 1px solid #344552; border-radius: 8px; background: #17232e; margin: 0 0 12px; padding: 12px; }
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    h2 { font-size: 18px; margin: 0 0 10px; color: #b9d8e8; }
+    p { margin: 6px 0; }
+    button { min-height: 44px; margin: 4px; padding: 10px 12px; border: 1px solid #4b6575; border-radius: 6px; background: #203445; color: #f4fbff; font-size: 16px; }
+    button:disabled { opacity: 0.45; }
+    button.stop { background: #9e1f1f; border-color: #df5757; font-weight: bold; }
+    button.good { background: #1d5d43; border-color: #39d98a; }
+    button.warn { background: #604b19; border-color: #ffc857; }
+    input { width: 84px; min-height: 34px; margin: 4px; border-radius: 4px; border: 1px solid #4b6575; background: #0d151d; color: #f4fbff; font-size: 16px; padding: 6px; }
+    .row { margin: 6px 0; }
+    .value { color: #84d7ff; font-weight: bold; }
+    .bad { color: #ff8b82; }
+    .ok { color: #83e6af; }
+    .tile { border-top: 1px solid #2d3f4d; padding: 8px 0; }
+    .tile strong { display: block; }
+    .small { color: #b8c7d1; font-size: 13px; }
+    #events { max-height: 190px; overflow: auto; background: #0d151d; padding: 8px; border-radius: 6px; }
+    #camera { width: 100%; max-width: 420px; background: #0d151d; border: 1px solid #344552; }
+    a { color: #84d7ff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PLUTO Lite Console</h1>
+    <p>State: <span id="state" class="value">loading</span> / <span id="substate">...</span></p>
+    <p>Fault: <span id="fault">...</span></p>
+    <p class="small">Old iPad safe mode. <a href="/full">Open full dashboard</a></p>
+    <button id="stop" class="stop">EMERGENCY STOP</button>
+    <button id="refresh" class="warn">Refresh Hardware</button>
+    <button id="reset" class="good">Reset Error</button>
+  </header>
+
+  <section>
+    <h2>Modes</h2>
+    <div id="states">""" + states + """</div>
+    <p id="stateReason" class="small"></p>
+  </section>
+
+  <section>
+    <h2>Manual Drive</h2>
+    <div class="row">
+      <button data-drive="0,0" class="stop">Stop</button>
+      <button data-drive="600,0">Forward</button>
+      <button data-drive="-500,0">Back</button>
+      <button data-drive="400,-250">Left</button>
+      <button data-drive="400,250">Right</button>
+    </div>
+    <div class="row">
+      Arm <input id="armNo" type="number" value="1">
+      Steps <input id="armSteps" type="number" value="5000">
+      Speed <input id="armSpeed" type="number" value="800">
+      <button id="armSend">Move Arm</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Hardware</h2>
+    <div id="hardware">loading</div>
+  </section>
+
+  <section>
+    <h2>Camera Snapshot</h2>
+    <img id="camera" src="/camera.jpg" alt="camera snapshot">
+  </section>
+
+  <section>
+    <h2>Events</h2>
+    <div id="events">loading</div>
+  </section>
+
+  <script>
+    (function () {
+      function el(id) { return document.getElementById(id); }
+      function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+          return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+        });
+      }
+      function xhr(method, url, body, done) {
+        var req = new XMLHttpRequest();
+        req.open(method, url, true);
+        req.onreadystatechange = function () {
+          if (req.readyState !== 4) return;
+          var payload = null;
+          try { payload = req.responseText ? JSON.parse(req.responseText) : {}; } catch (err) { payload = {error: String(err), raw: req.responseText}; }
+          done(req.status, payload);
+        };
+        req.onerror = function () { done(0, {error: 'network error'}); };
+        if (body) req.setRequestHeader('Content-Type', 'application/json');
+        req.send(body ? JSON.stringify(body) : null);
+      }
+      function post(url, body, done) {
+        xhr('POST', url, body || {}, function (status, data) {
+          if (done) done(status, data);
+          refresh();
+        });
+      }
+      function renderHardware(hardware) {
+        var html = '';
+        for (var key in hardware) {
+          if (!hardware.hasOwnProperty(key)) continue;
+          var item = hardware[key] || {};
+          var cls = item.connected ? 'ok' : (item.required ? 'bad' : '');
+          html += '<div class="tile"><strong class="' + cls + '">' + esc(item.name || key) + '</strong>';
+          html += '<span class="small">' + esc(item.status || 'unknown') + ' / ' + esc(item.port || 'no port') + ' / ' + esc(item.detail || '') + '</span></div>';
+        }
+        el('hardware').innerHTML = html || 'no hardware data';
+      }
+      function renderEvents(events) {
+        var html = '';
+        events = events || [];
+        for (var i = 0; i < events.length && i < 30; i += 1) {
+          var item = events[i] || {};
+          var t = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : '';
+          html += '<div><span class="small">' + esc(t) + ' / ' + esc(item.level || '') + '</span> ' + esc(item.message || '') + '</div>';
+        }
+        el('events').innerHTML = html || 'no events';
+      }
+      function renderStates(data) {
+        var allowed = {};
+        var rows = data.allowed_next_states || [];
+        for (var i = 0; i < rows.length; i += 1) allowed[rows[i].state] = rows[i];
+        var buttons = document.getElementsByClassName('state');
+        var reason = '';
+        for (var j = 0; j < buttons.length; j += 1) {
+          var btn = buttons[j];
+          var item = allowed[btn.getAttribute('data-state')];
+          btn.disabled = !item || !item.allowed;
+          if (item && item.state === data.current_state) reason = item.reason || '';
+        }
+        el('stateReason').innerHTML = esc(reason);
+      }
+      function render(data) {
+        el('state').innerHTML = esc(data.current_state || 'unknown');
+        el('substate').innerHTML = esc(data.current_substate || 'none');
+        el('fault').innerHTML = esc(data.fault_reason || 'none');
+        renderStates(data);
+        renderHardware(data.hardware || {});
+        renderEvents(data.events || []);
+      }
+      function refresh() {
+        xhr('GET', '/api/status', null, function (status, data) {
+          if (status === 200) render(data);
+          else el('state').innerHTML = 'offline';
+        });
+      }
+      function bind() {
+        el('stop').onclick = function () { post('/api/emergency-stop', {}); };
+        el('refresh').onclick = function () { post('/api/refresh-hardware', {}); };
+        el('reset').onclick = function () { post('/api/reset-error', {}); };
+        el('armSend').onclick = function () {
+          post('/api/manual/arm', {
+            arm: parseInt(el('armNo').value, 10) || 1,
+            steps: parseInt(el('armSteps').value, 10) || 0,
+            speed: parseInt(el('armSpeed').value, 10) || 0
+          });
+        };
+        var stateButtons = document.getElementsByClassName('state');
+        for (var i = 0; i < stateButtons.length; i += 1) {
+          stateButtons[i].onclick = function () { post('/api/request-state', {state: this.getAttribute('data-state')}); };
+        }
+        var driveButtons = document.querySelectorAll('button[data-drive]');
+        for (var j = 0; j < driveButtons.length; j += 1) {
+          driveButtons[j].onclick = function () {
+            var parts = this.getAttribute('data-drive').split(',');
+            post('/api/manual/drive', {speed: parseInt(parts[0], 10) || 0, steer: parseInt(parts[1], 10) || 0});
+          };
+        }
+      }
+      bind();
+      refresh();
+      setInterval(refresh, 1500);
+      setInterval(function () { el('camera').src = '/camera.jpg?t=' + new Date().getTime(); }, 2500);
+    }());
+  </script>
+</body>
+</html>"""
+
+
+def is_legacy_ipad(user_agent: str) -> bool:
+    ua = user_agent.lower()
+    if "ipad" not in ua:
+        return False
+    legacy_markers = (
+        " os 7_",
+        " os 8_",
+        " os 9_",
+        " os 10_",
+        "cpu os 7_",
+        "cpu os 8_",
+        "cpu os 9_",
+        "cpu os 10_",
+    )
+    return any(marker in ua for marker in legacy_markers)
+
+
 def face_page() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -5369,6 +5611,14 @@ class PlutoRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/":
+            user_agent = self.headers.get("User-Agent", "")
+            page = lite_page() if is_legacy_ipad(user_agent) else html_page()
+            self.send_bytes(HTTPStatus.OK, page.encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/lite":
+            self.send_bytes(HTTPStatus.OK, lite_page().encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/full":
             self.send_bytes(HTTPStatus.OK, html_page().encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/face":
@@ -5571,6 +5821,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--wave-pose-max-tracks", type=int, default=2, help="Maximum tracked humans to run pose on. Default: 2.")
     parser.add_argument("--microphone-device", help="Preferred ALSA microphone id/name, for example headset or plughw:CARD=...,DEV=0.")
     parser.add_argument("--speaker-device", help="Preferred ALSA speaker id/name.")
+    parser.add_argument("--fast-start", action="store_true", help="Bind the website before slower camera, audio, and serial probes finish.")
     return parser.parse_args(argv)
 
 
@@ -5605,6 +5856,7 @@ def main(argv: list[str]) -> int:
         wave_pose_max_tracks=args.wave_pose_max_tracks,
         microphone_device=args.microphone_device,
         speaker_device=args.speaker_device,
+        fast_start=args.fast_start,
     )
     server = PlutoWebServer((args.host, args.port), PlutoRequestHandler, context)
     print(f"PLUTO web shell running on {args.host}:{args.port}")

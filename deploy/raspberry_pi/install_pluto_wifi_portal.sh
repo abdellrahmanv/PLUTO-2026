@@ -55,7 +55,7 @@ PLUTO_USER="${PLUTO_USER:-${SUDO_USER:-pi}}"
 PLUTO_PYTHON="${PLUTO_PYTHON:-/home/pi/yolo/env/bin/python}"
 PLUTO_WEB_HOST="${PLUTO_WEB_HOST:-0.0.0.0}"
 PLUTO_WEB_PORT="${PLUTO_WEB_PORT:-8080}"
-PLUTO_WEB_EXTRA_ARGS="${PLUTO_WEB_EXTRA_ARGS:-}"
+PLUTO_WEB_EXTRA_ARGS="${PLUTO_WEB_EXTRA_ARGS---fast-start}"
 PLUTO_SPEAKER_DEVICE="${PLUTO_SPEAKER_DEVICE:-plughw:CARD=Headphones,DEV=0}"
 PLUTO_DANCE_AUDIO="${PLUTO_DANCE_AUDIO:-}"
 PLUTO_WIFI_IFACE="${PLUTO_WIFI_IFACE:-wlan0}"
@@ -122,7 +122,7 @@ render_service() {
 
 if [[ "$INSTALL_APT" -eq 1 ]]; then
   apt-get update
-  apt-get install -y hostapd dnsmasq
+  apt-get install -y hostapd dnsmasq iw rfkill
 fi
 
 mkdir -p /etc/pluto
@@ -151,6 +151,7 @@ render_service "$SCRIPT_DIR/systemd/pluto-hostapd.service" /etc/systemd/system/p
 render_service "$SCRIPT_DIR/systemd/pluto-dnsmasq.service" /etc/systemd/system/pluto-dnsmasq.service
 render_service "$SCRIPT_DIR/systemd/pluto-captive-portal.service" /etc/systemd/system/pluto-captive-portal.service
 chmod 0644 /etc/systemd/system/pluto-*.service
+chmod 0755 "$SCRIPT_DIR/pluto_ap_network.sh" 2>/dev/null || true
 
 if command -v nmcli >/dev/null 2>&1 && systemctl list-unit-files NetworkManager.service >/dev/null 2>&1; then
   mkdir -p /etc/NetworkManager/conf.d
@@ -158,9 +159,11 @@ if command -v nmcli >/dev/null 2>&1 && systemctl list-unit-files NetworkManager.
 [keyfile]
 unmanaged-devices=interface-name:$PLUTO_WIFI_IFACE
 EOF
+  nmcli dev set "$PLUTO_WIFI_IFACE" managed no 2>/dev/null || true
   systemctl reload NetworkManager 2>/dev/null || true
 fi
 
+systemctl stop "wpa_supplicant@$PLUTO_WIFI_IFACE.service" 2>/dev/null || true
 systemctl stop hostapd dnsmasq 2>/dev/null || true
 systemctl disable hostapd dnsmasq 2>/dev/null || true
 systemctl daemon-reload

@@ -23,6 +23,7 @@ REQUIRED_FILES = [
     "deploy/raspberry_pi/enable_pluto_booth_mode.sh",
     "deploy/raspberry_pi/disable_pluto_booth_mode.sh",
     "deploy/raspberry_pi/install_pluto_wifi_portal.sh",
+    "deploy/raspberry_pi/pluto_ap_network.sh",
     "deploy/raspberry_pi/hostapd.conf.in",
     "deploy/raspberry_pi/dnsmasq.conf.in",
     "deploy/raspberry_pi/systemd/pluto-web.service",
@@ -73,11 +74,20 @@ def assert_assets() -> None:
     assert "systemctl enable" in installer
     assert "--start-now" in installer
     assert "PLUTO_DANCE_AUDIO" in installer
+    assert "--fast-start" in installer
+    assert "nmcli dev set" in installer
+
+    ap_network = (ROOT / "deploy/raspberry_pi/pluto_ap_network.sh").read_text(encoding="utf-8")
+    assert "rfkill unblock wifi" in ap_network
+    assert "managed no" in ap_network
+    assert "wpa_supplicant" in ap_network
+    assert 'ip addr add "$AP_IP/24"' in ap_network
 
     enable_booth = (ROOT / "deploy/raspberry_pi/enable_pluto_booth_mode.sh").read_text(encoding="utf-8")
     assert "install_pluto_wifi_portal.sh" in enable_booth
     assert "PLUTO booth mode is enabled" in enable_booth
     assert "PLUTO_DANCE_AUDIO" in enable_booth
+    assert "--fast-start" in enable_booth
 
     disable_booth = (ROOT / "deploy/raspberry_pi/disable_pluto_booth_mode.sh").read_text(encoding="utf-8")
     assert "pluto-captive-portal.service" in disable_booth
@@ -87,18 +97,29 @@ def assert_assets() -> None:
     hostapd = (ROOT / "deploy/raspberry_pi/hostapd.conf.in").read_text(encoding="utf-8")
     assert "wpa=2" in hostapd
     assert "{{PLUTO_SSID}}" in hostapd
+    assert "ignore_broadcast_ssid=0" in hostapd
 
     dnsmasq = (ROOT / "deploy/raspberry_pi/dnsmasq.conf.in").read_text(encoding="utf-8")
     assert "address=/#/{{PLUTO_AP_IP}}" in dnsmasq
     assert "dhcp-range={{PLUTO_DHCP_START}},{{PLUTO_DHCP_END}}" in dnsmasq
+    assert "dhcp-option=114,http://{{PLUTO_AP_IP}}/" in dnsmasq
 
     web_service = (ROOT / "deploy/raspberry_pi/systemd/pluto-web.service").read_text(encoding="utf-8")
     assert "pluto_runtime.web_shell" in web_service
     assert "Restart=always" in web_service
+    assert "network-online.target" not in web_service
+
+    ap_service = (ROOT / "deploy/raspberry_pi/systemd/pluto-ap-network.service").read_text(encoding="utf-8")
+    assert "pluto_ap_network.sh start" in ap_service
 
     portal_service = (ROOT / "deploy/raspberry_pi/systemd/pluto-captive-portal.service").read_text(encoding="utf-8")
     assert "pluto_runtime.captive_portal" in portal_service
     assert "--port 80" in portal_service
+
+    web_shell = (ROOT / "pluto_runtime/web_shell.py").read_text(encoding="utf-8")
+    assert "--fast-start" in web_shell
+    assert "def lite_page" in web_shell
+    assert "def is_legacy_ipad" in web_shell
 
 
 def assert_portal_runtime() -> None:
