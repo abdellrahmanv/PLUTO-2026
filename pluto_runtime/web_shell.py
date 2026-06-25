@@ -47,7 +47,7 @@ from .mode_manager import SafetyContext, ModeManager, VALID_STATES
 from .stm32_link import Stm32SerialLink, status_to_dict as stm32_status_to_dict
 from .validation_center import ValidationCenter
 from .wave_detection import SimpleWaveDetector
-from .welcome_approach import ApproachStatus, WelcomeApproachPlanner
+from .welcome_approach import ApproachConfig, ApproachStatus, WelcomeApproachPlanner
 from .welcome_interaction import WelcomeInteractionFSM
 from .welcome_talk import TalkResult, WelcomeTalkEngine
 
@@ -59,6 +59,40 @@ STATIC_DIR = Path(__file__).resolve().with_name("static")
 DANCE_FALLBACK_AUDIO = Path("/tmp/pluto_dance_beat.wav")
 DANCE_OPEN_LOOP_MOVE_S = 2.0
 DANCE_OPEN_LOOP_TURN_S = 1.6
+DANCE_BPM = 117.0
+DANCE_BEAT_S = 60.0 / DANCE_BPM
+DANCE_SONG_CHOREOGRAPHY: tuple[tuple[str, float, int, int], ...] = (
+    ("song_intro_hold", 4.0, 0, 0),
+    ("billie_jean_step_back", 2.0, -85, 0),
+    ("billie_jean_toe_freeze", 0.5, 0, 0),
+    ("moonwalk_glide_back", 2.0, -105, 0),
+    ("beat_check_forward", 1.0, 55, 0),
+    ("shoulder_pop_left", 1.0, 0, -115),
+    ("shoulder_pop_right", 1.0, 0, 115),
+    ("moonwalk_glide_back_2", 2.0, -105, 0),
+    ("heel_snap_stop", 0.5, 0, 0),
+    ("quarter_turn_left", 2.0, 0, -135),
+    ("backslide_short", 1.5, -95, 0),
+    ("hit_stop", 0.5, 0, 0),
+    ("quarter_turn_right", 2.0, 0, 135),
+    ("forward_recover", 1.5, 70, 0),
+    ("left_right_accents", 2.0, 0, -125),
+    ("right_left_accents", 2.0, 0, 125),
+    ("moonwalk_final", 3.0, -115, 0),
+    ("final_spin_accent", 2.0, 0, 150),
+    ("second_phrase_hold", 2.0, 0, 0),
+    ("moonwalk_side_left", 2.0, -95, -55),
+    ("moonwalk_side_right", 2.0, -95, 55),
+    ("kick_drum_forward_hit", 1.0, 65, 0),
+    ("snare_freeze", 1.0, 0, 0),
+    ("left_spin_phrase", 2.0, 0, -140),
+    ("right_spin_phrase", 2.0, 0, 140),
+    ("backslide_phrase", 3.0, -110, 0),
+    ("smooth_recover_phrase", 2.0, 60, 0),
+    ("final_moonwalk_phrase", 3.0, -115, 0),
+    ("final_pose_hold", 2.0, 0, 0),
+    ("final_freeze", 2.0, 0, 0),
+)
 STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
@@ -226,7 +260,7 @@ class PlutoWebContext:
         self.uno_thread_running = False
         self.uno_thread: threading.Thread | None = None
         self.uno_port: str | None = None
-        self.approach_planner = WelcomeApproachPlanner()
+        self.approach_planner = WelcomeApproachPlanner(ApproachConfig(dry_run=False, max_forward_speed=12))
         self.approach_status = ApproachStatus()
         self.approach_last_stop_at = 0.0
         self.dance_planner = DanceDryRunPlanner()
@@ -372,6 +406,7 @@ class PlutoWebContext:
                     self.process_idle_wave_trigger()
                     self.process_idle_human_trigger()
                     self.process_welcome_auto_return()
+                    self.process_welcome_approach()
                     self.wave.last_sample_at = time.time()
             except Exception as exc:
                 self.log("warn", f"Wave monitor error: {exc}")
@@ -694,7 +729,7 @@ class PlutoWebContext:
                 self.welcome_interaction.start(
                     trigger_source="website",
                     operator_triggered=True,
-                    initial_response="",
+                    initial_response=self.welcome_interaction.config.intro_text,
                     auto_return_to_idle=False,
                     greet_on_human_detection=True,
                 )
@@ -804,7 +839,6 @@ class PlutoWebContext:
             self.wave.last_reason = "wave trigger accepted"
             self.auto_welcome_no_human_since = None
             self.update_perception_workload("WELCOME")
-            self.welcome_interaction.start(trigger_source=source, operator_triggered=False, auto_return_to_idle=False)
         else:
             self.wave.rejected_count += 1
             self.wave.last_reason = result.reason
@@ -1023,6 +1057,7 @@ class PlutoWebContext:
                 active=True,
                 use_ultrasonic=bool(use_ultrasonic),
                 current_step="starting_audio",
+                total_steps=len(DANCE_SONG_CHOREOGRAPHY),
                 started_at=time.time(),
                 last_update_at=time.time(),
                 audio_file=audio_path,
@@ -1048,7 +1083,7 @@ class PlutoWebContext:
             return DANCE_FALLBACK_AUDIO
         sample_rate = 22050
         duration_s = 28
-        beat_hz = 2.0
+        beat_hz = DANCE_BPM / 60.0
         with wave.open(str(DANCE_FALLBACK_AUDIO), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
@@ -1089,18 +1124,7 @@ class PlutoWebContext:
             if not play.get("ok"):
                 raise RuntimeError(str(play.get("detail") or "audio playback failed"))
             self.dance_audio_started = True
-            self._set_live_dance_step("forward_1", 1)
-            self._live_move_distance(direction=1, speed=DANCE_MAX_SPEED, label="forward_1")
-            self._set_live_dance_step("backward_1", 2)
-            self._live_move_distance(direction=-1, speed=DANCE_MIN_SPEED, label="backward_1")
-            self._set_live_dance_step("rotate_1", 3)
-            self._live_rotate_180(label="rotate_1")
-            self._set_live_dance_step("forward_2", 4)
-            self._live_move_distance(direction=1, speed=DANCE_MAX_SPEED, label="forward_2")
-            self._set_live_dance_step("backward_2", 5)
-            self._live_move_distance(direction=-1, speed=DANCE_MIN_SPEED, label="backward_2")
-            self._set_live_dance_step("rotate_2", 6)
-            self._live_rotate_180(label="rotate_2")
+            self._live_run_song_choreography(time.monotonic())
             self.send_stm32_stop_safe(self.hardware["stm32"].port)
             with self.lock:
                 self.dance_live.active = False
@@ -1128,6 +1152,45 @@ class PlutoWebContext:
             self.dance_live.current_step = step
             self.dance_live.step_index = index
             self.dance_live.last_update_at = time.time()
+
+    def _live_run_song_choreography(self, audio_started_at: float) -> None:
+        next_cue_at = audio_started_at
+        for index, (label, beats, speed, steer) in enumerate(DANCE_SONG_CHOREOGRAPHY, start=1):
+            self._set_live_dance_step(label, index)
+            cue_duration_s = max(0.05, float(beats) * DANCE_BEAT_S)
+            self._sleep_until_live_cue(next_cue_at)
+            cue_end_at = next_cue_at + cue_duration_s
+
+            while not self.dance_live_stop.is_set() and time.monotonic() < cue_end_at:
+                self._raise_if_live_obstacle()
+                result = self._send_live_drive(speed, steer)
+                elapsed_audio_s = max(0.0, time.monotonic() - audio_started_at)
+                with self.lock:
+                    self.dance_live.measured_distance_m += abs(speed) * 0.00003
+                    self.dance_live.measured_turn_deg += abs(steer) * 0.003
+                    self.dance_live.last_command = {
+                        "speed": speed,
+                        "steer": steer,
+                        "serial": result,
+                        "label": label,
+                        "beats": beats,
+                        "song_time_s": round(elapsed_audio_s, 2),
+                        "song_beat": round(elapsed_audio_s / DANCE_BEAT_S, 1),
+                    }
+                    self.dance_live.last_update_at = time.time()
+                time.sleep(min(0.08, max(0.01, cue_end_at - time.monotonic())))
+
+            if self.dance_live_stop.is_set():
+                raise RuntimeError("live dance stopped by operator")
+            next_cue_at = cue_end_at
+
+        self._send_live_drive(0, 0)
+
+    def _sleep_until_live_cue(self, cue_at: float) -> None:
+        while not self.dance_live_stop.is_set() and time.monotonic() < cue_at:
+            time.sleep(min(0.03, cue_at - time.monotonic()))
+        if self.dance_live_stop.is_set():
+            raise RuntimeError("live dance stopped by operator")
 
     def _live_move_distance(self, direction: int, speed: int, label: str) -> None:
         start_distance = self._live_distance_m_or_none()
@@ -1615,10 +1678,10 @@ class PlutoWebContext:
             and self.mode_manager.current_state == "WELCOME"
             and self.mode_manager.current_substate == "WELCOME_DETECT"
         ):
-            self.mode_manager.set_substate("WELCOME_APPROACH_DRY_RUN", return_lock=False)
+            self.mode_manager.set_substate("WELCOME_APPROACH", return_lock=False)
             status.substate = self.mode_manager.current_substate
 
-        if status.active:
+        if status.active and status.dry_run:
             now = time.monotonic()
             if now - self.approach_last_stop_at >= 1.0:
                 stop = self.send_stm32_stop_safe(self.hardware["stm32"].port)
@@ -1773,7 +1836,7 @@ class PlutoWebContext:
             self.welcome_interaction.start(
                 trigger_source="camera_human",
                 operator_triggered=False,
-                initial_response="",
+                initial_response=self.welcome_interaction.config.intro_text,
                 auto_return_to_idle=True,
                 greet_on_human_detection=False,
             )
@@ -1818,6 +1881,55 @@ class PlutoWebContext:
             self.log("pass", f"Auto WELCOME returned to IDLE; stop guard: {stop.get('detail')}")
         else:
             self.log("warn", f"Auto WELCOME return to IDLE rejected: {result.reason}")
+
+    def process_welcome_approach(self) -> None:
+        if self.mode_manager.current_state != "WELCOME":
+            return
+        if self.mode_manager.current_substate not in {"WELCOME_DETECT", "WELCOME_APPROACH"}:
+            return
+
+        camera_status = status_to_dict(self.camera_service.get_status())
+        stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
+        mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
+
+        status = self.approach_planner.compute(
+            camera_status=camera_status,
+            stm32_runtime=stm32_runtime,
+            wave_status=self.wave_status(),
+            current_state=self.mode_manager.current_state,
+            current_substate=self.mode_manager.current_substate,
+        )
+
+        if self.mode_manager.current_substate == "WELCOME_DETECT" and status.active and status.target_id is not None:
+            self.mode_manager.set_substate("WELCOME_APPROACH", return_lock=False)
+            status.substate = "WELCOME_APPROACH"
+
+        if self.mode_manager.current_substate == "WELCOME_APPROACH":
+            height_ratio = status.target_box_height_ratio or 0.0
+            edges = status.target_edge_contact or []
+            full_resolution_reached = (height_ratio >= 0.95) or ("top" in edges and "bottom" in edges)
+
+            if full_resolution_reached or status.target_distance_class == "too_close" or status.target_distance_class == "good":
+                if self.stm32_link is not None and self.hardware["stm32"].connected:
+                    self.stm32_link.send_drive(0, 0)
+                self.log("stop", "WELCOME_APPROACH complete: full resolution reached. Stopping motors.")
+                self.mode_manager.set_substate("WELCOME_TALK", return_lock=False)
+                self.welcome_interaction.start(
+                    trigger_source="camera_wave",
+                    operator_triggered=False,
+                    initial_response=self.welcome_interaction.config.intro_text,
+                    auto_return_to_idle=False,
+                )
+            else:
+                if status.proposed_motion in {"forward", "turn_left", "turn_right"} and status.proposed_speed is not None and status.proposed_steer is not None:
+                    if self.stm32_link is not None and self.hardware["stm32"].connected:
+                        self.stm32_link.send_drive(status.proposed_speed, status.proposed_steer)
+                    self.log("drive", f"WELCOME_APPROACH moving: speed={status.proposed_speed}, steer={status.proposed_steer}, motion={status.proposed_motion}")
+                else:
+                    if self.stm32_link is not None and self.hardware["stm32"].connected:
+                        self.stm32_link.send_drive(0, 0)
+
+        self.approach_status = status
 
     def error_status(self, mode_snapshot: dict[str, Any], stm32_runtime: dict[str, Any]) -> dict[str, Any]:
         in_error = mode_snapshot["current_state"] == "ERROR"

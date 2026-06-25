@@ -37,7 +37,7 @@ class WelcomeInteractionConfig:
     human_detection_grace_duration: float = 1.5
     speech_threshold: float = 0.03
     scan_period: float = 0.15
-    intro_text: str = "Welcome. I am Pluto, a graduation project robot."
+    intro_text: str = "Welcome. Who is he?"
 
     def update(self, values: dict[str, Any]) -> None:
         ranges = {
@@ -162,7 +162,10 @@ class WelcomeInteractionFSM:
             self._running = True
             self._interaction_started = time.monotonic()
             self._human_detection_grace_until = 0.0
-            transition = self._set_state_locked("SCANNING", "WELCOME interaction armed")
+            if self._initial_response:
+                transition = self._set_state_locked("HUMAN_DETECTED", "WELCOME intro queued")
+            else:
+                transition = self._set_state_locked("SCANNING", "WELCOME interaction armed")
             self._sync_config_locked()
             self._status.enabled = True
             self._status.human_detected = False

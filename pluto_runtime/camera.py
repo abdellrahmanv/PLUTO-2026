@@ -245,6 +245,7 @@ class ThreadedCamera:
                     continue
 
                 frame_rgb = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
+                frame_rgb = self.cv2.rotate(frame_rgb, self.cv2.ROTATE_180)
                 now = time.monotonic()
                 with self.lock:
                     self.latest_frame = frame_rgb
