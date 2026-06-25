@@ -37,7 +37,7 @@ class WelcomeInteractionConfig:
     human_detection_grace_duration: float = 1.5
     speech_threshold: float = 0.03
     scan_period: float = 0.15
-    intro_text: str = "Welcome. Who is he?"
+    intro_text: str = "Hi, I am Pluto, an AI powered welcoming robot. Feel free to ask me anything!"
 
     def update(self, values: dict[str, Any]) -> None:
         ranges = {

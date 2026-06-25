@@ -179,7 +179,7 @@ def main() -> int:
         config=WelcomeInteractionConfig(post_tts_delay=0.01, cooldown_duration=0.01, max_recording_time=0.5, queue_flush_duration=0.0, scan_period=0.02),
     )
     edge_fsm.start(trigger_source="edge_smoke", operator_triggered=True, greet_on_human_detection=True)
-    intro = "Welcome. Who is he?"
+    intro = "Hi, I am Pluto, an AI powered welcoming robot. Feel free to ask me anything!"
     wait_for(
         lambda: edge_audio.spoken_texts.count(intro) >= 2,
         lambda: f"human re-entry did not speak intro twice: {edge_fsm.status()} spoken={edge_audio.spoken_texts}",
