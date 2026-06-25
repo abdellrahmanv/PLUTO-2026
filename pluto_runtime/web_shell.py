@@ -3214,6 +3214,256 @@ def html_page() -> str:
     @media (min-width: 861px) and (max-width: 1180px) {{
       .mission-strip {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
+
+    /* ── Dashboard Tabs ─────────────────────────────────────── */
+    .dash-tabs {{
+      display: flex;
+      gap: 6px;
+      padding: 10px 20px 0;
+      border-bottom: 2px solid rgba(255,255,255,0.08);
+      background: var(--surface, #0e1622);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }}
+    .dash-tab {{
+      padding: 9px 22px;
+      border: none;
+      border-radius: 8px 8px 0 0;
+      background: transparent;
+      color: rgba(255,255,255,0.5);
+      font: 700 13px/1 system-ui, sans-serif;
+      letter-spacing: .04em;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: color 160ms, border-color 160ms, background 160ms;
+    }}
+    .dash-tab:hover {{ color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.05); }}
+    .dash-tab.active {{ color: #32b5ff; border-bottom-color: #32b5ff; background: rgba(50,181,255,0.08); }}
+    .dash-tab-panel {{ display: none; }}
+    .dash-tab-panel.active {{ display: block; }}
+
+    /* ── Embedded Face Panel ────────────────────────────────── */
+    #tab-face {{
+      width: 100%;
+      height: calc(100dvh - 120px);
+      min-height: 480px;
+      display: none;
+      flex-direction: column;
+      background:
+        radial-gradient(circle at 50% 34%, rgba(50,181,255,0.22), transparent 42%),
+        linear-gradient(180deg,#071018 0%,#05080b 100%);
+      color: #e8fbff;
+      overflow: hidden;
+      --face: #e8fbff;
+      --face-dim: #82d8ec;
+      --accent: #32b5ff;
+      --happy: #39d98a;
+      --warn: #ffd166;
+      --bad: #ff5f57;
+      --mood: var(--accent);
+      --mood-rgb: 50,181,255;
+      --blink: 1;
+      --talk: 1;
+      --look-x: 0px;
+      --look-y: 0px;
+      --halo-scale: 1;
+      --spark-scale: 1;
+      --eye-tilt: 0deg;
+      --left-brow: 0deg;
+      --right-brow: 0deg;
+    }}
+    #tab-face.active {{ display: flex; }}
+    #facePanel {{
+      flex: 1;
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-height: 0;
+      overflow: hidden;
+    }}
+    #facePanel .fp-halo {{
+      position: absolute;
+      width: min(78%, 900px);
+      aspect-ratio: 1/.5;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center,rgba(var(--mood-rgb),.28),transparent 68%);
+      filter: blur(18px);
+      opacity: .78;
+      transform: translateY(-8%) scale(var(--halo-scale,1));
+      transition: background 220ms,transform 220ms,opacity 220ms;
+      pointer-events: none;
+    }}
+    #facePanel .fp-sparkles {{
+      position: absolute;
+      inset: 9% 8% 20%;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 180ms;
+    }}
+    #facePanel .fp-sparkles i {{
+      position: absolute;
+      width: clamp(8px,1.4vw,18px);
+      height: clamp(8px,1.4vw,18px);
+      border-radius: 4px;
+      background: var(--mood);
+      box-shadow: 0 0 24px var(--mood);
+      transform: rotate(45deg) scale(var(--spark-scale,1));
+      animation: fpFloatSpark 1800ms ease-in-out infinite;
+    }}
+    #facePanel .fp-sparkles i:nth-child(1) {{ left:9%;top:16%;animation-delay:0ms; }}
+    #facePanel .fp-sparkles i:nth-child(2) {{ left:84%;top:12%;animation-delay:320ms; }}
+    #facePanel .fp-sparkles i:nth-child(3) {{ left:18%;top:70%;animation-delay:620ms; }}
+    #facePanel .fp-sparkles i:nth-child(4) {{ left:76%;top:66%;animation-delay:920ms; }}
+    #facePanel .fp-brows {{
+      position: absolute;
+      top: 18%;
+      left: 50%;
+      width: min(78%,980px);
+      display: flex;
+      justify-content: space-between;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }}
+    #facePanel .fp-brow {{
+      width: min(24%,260px);
+      height: clamp(10px,1.8vh,20px);
+      border-radius: 999px;
+      background: rgba(var(--mood-rgb),.78);
+      box-shadow: 0 0 22px rgba(var(--mood-rgb),.55);
+      opacity: .7;
+      transition: transform 180ms,opacity 180ms,background 180ms;
+    }}
+    #facePanel .fp-brow-left {{ transform: rotate(var(--left-brow)); }}
+    #facePanel .fp-brow-right {{ transform: rotate(var(--right-brow)); }}
+    #facePanel .fp-eyes {{
+      width: min(86%,1060px);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: clamp(28px,6vw,110px);
+      align-items: center;
+      transform: translateY(-3%);
+    }}
+    #facePanel .fp-eye {{
+      height: clamp(120px,22vh,280px);
+      border-radius: clamp(28px,5vw,72px);
+      background: var(--face);
+      box-shadow: 0 0 26px rgba(232,251,255,.95),0 0 90px rgba(var(--mood-rgb),.45);
+      transform: translateY(var(--look-y,0)) rotate(var(--eye-tilt)) scaleY(var(--blink,1));
+      transition: transform 120ms ease,border-radius 180ms ease,background 180ms ease;
+    }}
+    #facePanel .fp-eye::after {{
+      content:"";
+      display:block;
+      width:18%;height:18%;
+      margin:-44% 0 0 14%;
+      border-radius:999px;
+      background:rgba(255,255,255,.38);
+    }}
+    #facePanel .fp-pupil {{
+      width:34%;height:46%;
+      margin:18% auto 0;
+      border-radius:999px;
+      background:#061019;
+      opacity:.82;
+      transform:translateX(var(--look-x,0));
+      transition:transform 180ms ease;
+    }}
+    #facePanel .fp-mouth {{
+      position:absolute;
+      left:50%;top:66%;
+      width: min(32%,360px);
+      height: clamp(20px,5vh,58px);
+      border: clamp(7px,1.5vw,16px) solid var(--face);
+      border-top:0;
+      border-radius:0 0 999px 999px;
+      transform:translateX(-50%) scaleY(var(--talk,1));
+      filter:drop-shadow(0 0 18px rgba(232,251,255,.75));
+      transition:width 200ms,height 160ms,border-color 180ms,transform 90ms;
+    }}
+    #facePanel .fp-cheeks {{
+      position:absolute;top:57%;left:50%;
+      width:min(82%,980px);
+      display:flex;justify-content:space-between;
+      transform:translateX(-50%);
+      pointer-events:none;
+    }}
+    #facePanel .fp-cheek {{
+      width:clamp(32px,6vw,72px);
+      height:clamp(18px,3.5vw,40px);
+      border-radius:999px;
+      background:rgba(57,217,138,.22);
+      box-shadow:0 0 28px rgba(57,217,138,.32);
+      opacity:0;
+      transition:opacity 180ms;
+    }}
+    #facePanel .fp-caption {{
+      position:absolute;
+      left:50%;bottom:6%;
+      display:grid;gap:4px;
+      width:min(78%,700px);
+      text-align:center;
+      transform:translateX(-50%);
+      pointer-events:none;
+    }}
+    #fpMood {{
+      font-size:clamp(16px,3vw,38px);
+      font-weight:900;
+      color:var(--face);
+      text-shadow:0 0 22px rgba(var(--mood-rgb),.64);
+    }}
+    #fpHint {{
+      font-size:clamp(11px,1.6vw,16px);
+      font-weight:800;
+      color:rgba(232,251,255,.7);
+    }}
+    #fpFooter {{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+      padding:10px 18px;
+      border-top:1px solid rgba(232,251,255,.12);
+      background:rgba(5,8,11,.65);
+      color:rgba(232,251,255,.78);
+      font:700 clamp(11px,1.5vw,15px) ui-monospace,SFMono-Regular,Consolas,monospace;
+      flex-shrink:0;
+    }}
+    #fpStopBtn {{
+      min-height:34px;
+      border:0;border-radius:8px;
+      padding:7px 14px;
+      background:var(--bad);
+      color:#fff;
+      font:inherit;font-weight:900;
+      box-shadow:0 0 16px rgba(255,95,87,.42);
+      cursor:pointer;
+    }}
+    @keyframes fpFloatSpark {{
+      0%,100% {{ opacity:.25;transform:translateY(0) rotate(45deg) scale(.78); }}
+      50% {{ opacity:1;transform:translateY(-12px) rotate(45deg) scale(1.1); }}
+    }}
+    /* face state variants scoped to #tab-face */
+    #tab-face.fs-bootstrap {{ --mood:var(--face-dim);--mood-rgb:130,216,236;--left-brow:0deg;--right-brow:0deg; }}
+    #tab-face.fs-idle {{ --mood:var(--happy);--mood-rgb:57,217,138;--left-brow:-5deg;--right-brow:5deg; }}
+    #tab-face.fs-idle .fp-cheek,#tab-face.fs-idle .fp-sparkles,
+    #tab-face.fs-welcome .fp-cheek,#tab-face.fs-welcome .fp-sparkles {{ opacity:1; }}
+    #tab-face.fs-idle .fp-mouth,#tab-face.fs-welcome .fp-mouth {{ width:min(40%,460px);height:clamp(42px,8vh,86px);border-color:var(--happy); }}
+    #tab-face.fs-manual {{ --mood:#75d7ff;--mood-rgb:117,215,255;--left-brow:7deg;--right-brow:-7deg; }}
+    #tab-face.fs-manual .fp-mouth {{ width:min(24%,290px);height:clamp(11px,2vh,26px);border-color:#75d7ff; }}
+    #tab-face.fs-welcome {{ --mood:var(--happy);--mood-rgb:57,217,138;--left-brow:-9deg;--right-brow:9deg; }}
+    #tab-face.fs-return {{ --mood:var(--warn);--mood-rgb:255,209,102;--left-brow:10deg;--right-brow:-10deg; }}
+    #tab-face.fs-return .fp-mouth {{ width:min(28%,320px);height:clamp(16px,3vh,38px);border-color:var(--warn); }}
+    #tab-face.fs-talk .fp-mouth {{ width:min(26%,310px);height:clamp(50px,9vh,100px);border-radius:999px;border-top:clamp(7px,1.5vw,16px) solid var(--face); }}
+    #tab-face.fs-talk {{ --mood:var(--accent);--mood-rgb:50,181,255;--left-brow:-3deg;--right-brow:3deg; }}
+    #tab-face.fs-dance {{ --mood:var(--happy);--mood-rgb:57,217,138;--eye-tilt:-2deg; }}
+    #tab-face.fs-dance .fp-sparkles,.fp-dance .fp-cheek {{ opacity:1; }}
+    #tab-face.fs-dance .fp-eye {{ background:var(--happy);box-shadow:0 0 34px rgba(57,217,138,.9),0 0 100px rgba(57,217,138,.38); }}
+    #tab-face.fs-error {{ --mood:var(--bad);--mood-rgb:255,95,87;--left-brow:16deg;--right-brow:-16deg; }}
+    #tab-face.fs-error .fp-eye {{ background:var(--bad);box-shadow:0 0 34px rgba(255,95,87,.85),0 0 100px rgba(255,95,87,.36); }}
+    #tab-face.fs-error .fp-mouth {{ width:min(28%,340px);height:0;border-color:var(--bad);border-top:clamp(7px,1.5vw,16px) solid var(--bad);border-radius:999px; }}
+    #tab-face.fs-bootstrap .fp-eye {{ border-radius:999px;transform:translateY(4vh) scaleY(0.16); }}
+    #tab-face.fs-bootstrap .fp-mouth {{ width:min(18%,210px);height:0;border-top:clamp(7px,1.5vw,16px) solid var(--face-dim);border-color:var(--face-dim); }}
   </style>
 </head>
 <body>
@@ -3232,12 +3482,17 @@ def html_page() -> str:
           <option value="light">Light</option>
         </select>
       </label>
-      <a class="top-link" href="/face" target="_blank" rel="noopener">Tablet Face</a>
+      <a class="top-link" href="/face" target="_blank" rel="noopener">Tablet Face ↗</a>
       <button class="danger" id="estop">Emergency Stop</button>
       <button class="danger" id="piShutdown">Shutdown Pi</button>
     </div>
   </header>
   <main>
+    <nav class="dash-tabs" role="tablist" aria-label="Dashboard tabs">
+      <button class="dash-tab active" id="tabOpsBtn" role="tab" aria-selected="true"  aria-controls="tab-ops"  onclick="switchDashTab('ops')">⚙ Operations</button>
+      <button class="dash-tab"        id="tabFaceBtn" role="tab" aria-selected="false" aria-controls="tab-face" onclick="switchDashTab('face')">🤖 Face</button>
+    </nav>
+    <div id="tab-ops" class="dash-tab-panel active" role="tabpanel">
     <div class="mission-strip" aria-label="PLUTO mission readiness">
       <div class="mission-card mission-warn" id="missionStateCard">
         <span>Current State</span>
@@ -3667,10 +3922,181 @@ def html_page() -> str:
         <pre id="report">{{}}</pre>
       </section>
     </div>
+    </div><!-- /tab-ops -->
+
+    <!-- ═══════════════ FACE TAB ═══════════════ -->
+    <div id="tab-face" class="dash-tab-panel fs-bootstrap" role="tabpanel" aria-label="PLUTO robot face">
+      <div id="facePanel">
+        <div class="fp-halo" aria-hidden="true"></div>
+        <div class="fp-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="fp-brows" aria-hidden="true">
+          <div class="fp-brow fp-brow-left"></div>
+          <div class="fp-brow fp-brow-right"></div>
+        </div>
+        <div class="fp-eyes">
+          <div class="fp-eye"><div class="fp-pupil"></div></div>
+          <div class="fp-eye"><div class="fp-pupil"></div></div>
+        </div>
+        <div class="fp-mouth"></div>
+        <div class="fp-cheeks"><div class="fp-cheek"></div><div class="fp-cheek"></div></div>
+        <div class="fp-caption">
+          <span id="fpMood">Waking safely</span>
+          <span id="fpHint">Waiting for Pluto status</span>
+        </div>
+      </div>
+      <div id="fpFooter">
+        <span id="fpState">PLUTO BOOTING</span>
+        <span id="fpImu">IMU waiting</span>
+        <span id="fpClock">--:--</span>
+        <button id="fpStopBtn">STOP</button>
+      </div>
+    </div><!-- /tab-face -->
+
   </main>
   <script type="module" src="/static/pluto_3d.js"></script>
   <script>
     const THEME_KEY = 'pluto-theme';
+
+    /* ── Tab switching ────────────────────────────────────────── */
+    function switchDashTab(id) {{
+      ['ops', 'face'].forEach(t => {{
+        const panel = document.getElementById('tab-' + t);
+        const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
+        const active = (t === id);
+        panel.classList.toggle('active', active);
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active);
+      }});
+      if (id === 'face') fpStartAnimate();
+    }}
+
+    /* ── Embedded Face tab JS ─────────────────────────────────── */
+    (function () {{
+      const faceCt  = document.getElementById('tab-face');
+      const fpMood  = document.getElementById('fpMood');
+      const fpHint  = document.getElementById('fpHint');
+      const fpState = document.getElementById('fpState');
+      const fpImu   = document.getElementById('fpImu');
+      const fpClock = document.getElementById('fpClock');
+      const fpStop  = document.getElementById('fpStopBtn');
+      let fpBlinkUntil = 0;
+      let fpLastData   = null;
+      let fpAnimating  = false;
+
+      const fpMoodProfiles = {{
+        bootstrap: ['Waking safely',    'Self-check first. Motion stays zero.'],
+        idle:      ['Ready and playful','Waiting, watching, and gently being Pluto.'],
+        manual:    ['Focused control',  'Operator is driving. Eyes stay attentive.'],
+        welcome:   ['Warm welcome',     'Looking for a person and a safe greeting.'],
+        talk:      ['Speaking',         'Short local answers, friendly face fallback.'],
+        return:    ['Careful return',   'Return lock is active. Other modes wait.'],
+        dance:     ['Dance energy',     'Joyful look, dry-run safe until cleared.'],
+        error:     ['Safe stop',        'Clear fault face. No playful motion here.'],
+        game:      ['Game later',       'Polite unavailable mode for v1.'],
+        idleSafe:  ['Ready, but safe',  'STM32 is offline, so motion stays blocked.'],
+      }};
+
+      function fpMoodFor(data) {{
+        const state = String(data.current_state || 'BOOTSTRAP').toUpperCase();
+        const sub   = String(data.current_substate || '').toUpperCase();
+        if (state === 'ERROR') return 'error';
+        if (state === 'GAME_LATER') return 'game';
+        if (state === 'DANCE') return 'dance';
+        if (state === 'MANUAL') return 'manual';
+        if (state === 'WELCOME' && (sub.includes('RETURN') || (data.mode_manager && data.mode_manager.return_lock))) return 'return';
+        if (state === 'WELCOME' && sub.includes('TALK')) return 'talk';
+        if (state === 'WELCOME') return 'welcome';
+        if (state === 'IDLE') {{ const stm = data.stm32_runtime || {{}}; return stm.running === false ? 'idleSafe' : 'idle'; }}
+        if (state === 'BOOTSTRAP') return 'bootstrap';
+        return 'idle';
+      }}
+
+      function fpSetMood(mood) {{
+        const vis = mood === 'idleSafe' ? 'idle' : mood;
+        // Remove all fs-* classes then add the right one
+        faceCt.className = faceCt.className.replace(/\bfs-\S+/g, '').trim() + ' fs-' + vis;
+        const p = fpMoodProfiles[mood] || fpMoodProfiles.idle;
+        fpMood.textContent = p[0];
+        fpHint.textContent = p[1];
+      }}
+
+      function fpRender(data) {{
+        fpLastData = data;
+        const mood = fpMoodFor(data);
+        fpSetMood(mood);
+        const state    = data.current_state || 'UNKNOWN';
+        const substate = data.current_substate ? ` / ${{data.current_substate}}` : '';
+        fpState.textContent = `PLUTO ${{state}}${{substate}}`;
+        if (data.fault_reason && mood === 'error') fpHint.textContent = data.fault_reason;
+        const orient = data.stm32_runtime && data.stm32_runtime.imu_orientation;
+        if (orient && orient.available && !orient.calibrating) {{
+          fpImu.textContent = `roll ${{Number(orient.roll||0).toFixed(0)}} pitch ${{Number(orient.pitch||0).toFixed(0)}} yaw ${{Number(orient.yaw||0).toFixed(0)}}`;
+        }} else if (orient && orient.calibrating) {{
+          fpImu.textContent = `IMU calibrating ${{Math.round((orient.calibration_progress||0)*100)}}%`;
+        }} else {{
+          fpImu.textContent = (data.stm32_runtime && data.stm32_runtime.running) ? 'IMU waiting' : 'STM32 offline';
+        }}
+      }}
+
+      async function fpRefresh() {{
+        try {{
+          const res = await fetch('/api/status', {{cache:'no-store'}});
+          fpRender(await res.json());
+        }} catch (e) {{
+          fpState.textContent = 'PLUTO LINK LOST';
+          fpImu.textContent   = 'retrying';
+          fpSetMood('error');
+        }}
+      }}
+
+      function fpAnimate() {{
+        if (!fpAnimating) return;
+        const now  = performance.now();
+        const mood = fpMoodFor(fpLastData || {{}});
+        const playful = mood === 'idle' || mood === 'welcome';
+        if (now > fpBlinkUntil && Math.random() < (playful ? 0.026 : 0.014))
+          fpBlinkUntil = now + (playful ? 120 : 145);
+        const blink    = now < fpBlinkUntil ? 0.08 : 1;
+        const talk     = mood === 'talk' ? 0.72 + Math.abs(Math.sin(now/105))*0.95 : 1;
+        const dance    = mood === 'dance' ? Math.sin(now/170)*22 : 0;
+        const idleLook = playful ? Math.sin(now/850)*18 + Math.sin(now/2300)*9 : Math.sin(now/1800)*8;
+        const lookX    = dance || (idleLook + (mood==='manual' ? Math.sin(now/1400)*4 : 0));
+        const bob      = mood==='dance' ? Math.sin(now/140)*12 : (playful ? Math.sin(now/1100)*7 : Math.sin(now/2400)*4);
+        const halo     = mood==='dance' ? 1.04+Math.abs(Math.sin(now/220))*0.08 : (playful ? 1.0+Math.sin(now/1800)*0.04 : 1);
+        const spark    = mood==='dance' ? 1.25 : (playful ? 1 : 0.8);
+        faceCt.style.setProperty('--blink', blink);
+        faceCt.style.setProperty('--talk',  talk);
+        faceCt.style.setProperty('--look-x', lookX+'px');
+        faceCt.style.setProperty('--look-y', bob+'px');
+        faceCt.style.setProperty('--halo-scale', halo);
+        faceCt.style.setProperty('--spark-scale', spark);
+        fpClock.textContent = new Date().toLocaleTimeString([],{{hour:'2-digit',minute:'2-digit'}});
+        requestAnimationFrame(fpAnimate);
+      }}
+
+      window.fpStartAnimate = function () {{
+        if (!fpAnimating) {{ fpAnimating = true; fpAnimate(); }}
+      }};
+
+      fpStop.addEventListener('click', async (e) => {{
+        e.stopPropagation();
+        fpStop.textContent = 'STOPPING';
+        try {{
+          await fetch('/api/emergency-stop', {{method:'POST'}});
+          fpStop.textContent = 'STOP SENT';
+        }} catch (err) {{
+          fpStop.textContent = 'STOP ERROR';
+        }}
+        setTimeout(() => {{ fpStop.textContent = 'STOP'; }}, 1800);
+        await fpRefresh();
+      }});
+
+      /* Always poll so face data is fresh whether tab visible or not */
+      fpRefresh();
+      setInterval(fpRefresh, 500);
+    }})();
+
+
     const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     let validationCatalog = [];
     let validationLastResults = {{}};
