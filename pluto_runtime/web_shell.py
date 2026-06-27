@@ -403,9 +403,10 @@ class PlutoWebContext:
             try:
                 with self.lock:
                     self.update_wave_detector()
-                    self.process_idle_wave_trigger()
-                    self.process_idle_human_trigger()
-                    self.process_welcome_auto_return()
+                    # AUTO-TRANSITIONS DISABLED: states only change on operator request.
+                    # self.process_idle_wave_trigger()   # was: IDLE→WELCOME on wave
+                    # self.process_idle_human_trigger()  # was: IDLE→WELCOME on human detect
+                    # self.process_welcome_auto_return() # was: WELCOME→IDLE when human leaves
                     self.process_welcome_approach()
                     self.wave.last_sample_at = time.time()
             except Exception as exc:
@@ -1609,11 +1610,13 @@ class PlutoWebContext:
             stm32_runtime = stm32_status_to_dict(self.stm32_link.get_status()) if self.stm32_link else {}
             self.escalate_critical_alert_if_needed(stm32_runtime)
             self.update_perception_workload(mode_snapshot["current_state"])
-            self.process_idle_wave_trigger()
+            # AUTO-TRANSITIONS DISABLED: operator must explicitly choose state.
+            # self.process_idle_wave_trigger()            # was: IDLE→WELCOME on wave confirm
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             camera_status = status_to_dict(self.camera_service.get_status())
-            self.process_idle_human_trigger(camera_status)
-            self.process_welcome_auto_return(camera_status)
+            # AUTO-TRANSITIONS DISABLED: operator must explicitly choose state.
+            # self.process_idle_human_trigger(camera_status)   # was: IDLE→WELCOME on human detect
+            # self.process_welcome_auto_return(camera_status)  # was: WELCOME→IDLE when human leaves
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
             welcome_approach = self.update_welcome_approach(mode_snapshot, camera_status, stm32_runtime)
             mode_snapshot = self.mode_manager.snapshot(self.safety_context(operator_request=True))
