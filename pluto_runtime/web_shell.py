@@ -3249,7 +3249,7 @@ def html_page() -> str:
     /* ── Embedded Face Panel ────────────────────────────────── */
     #tab-face {{
       width: 100%;
-      height: calc(100dvh - 120px);
+      height: calc(100vh - 120px);
       min-height: 480px;
       display: none;
       flex-direction: column;
@@ -3280,15 +3280,18 @@ def html_page() -> str:
     #facePanel {{
       flex: 1;
       position: relative;
-      display: grid;
-      place-items: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       min-height: 0;
       overflow: hidden;
     }}
     #facePanel .fp-halo {{
       position: absolute;
-      width: min(78%, 900px);
-      aspect-ratio: 1/.5;
+      width: 78%;
+      max-width: 900px;
+      height: 39%;
+      max-height: 450px;
       border-radius: 50%;
       background: radial-gradient(ellipse at center,rgba(var(--mood-rgb),.28),transparent 68%);
       filter: blur(18px);
@@ -3306,8 +3309,12 @@ def html_page() -> str:
     }}
     #facePanel .fp-sparkles i {{
       position: absolute;
-      width: clamp(8px,1.4vw,18px);
-      height: clamp(8px,1.4vw,18px);
+      width: 1.4vw;
+      min-width: 8px;
+      max-width: 18px;
+      height: 1.4vw;
+      min-height: 8px;
+      max-height: 18px;
       border-radius: 4px;
       background: var(--mood);
       box-shadow: 0 0 24px var(--mood);
@@ -3322,15 +3329,19 @@ def html_page() -> str:
       position: absolute;
       top: 18%;
       left: 50%;
-      width: min(78%,980px);
+      width: 78%;
+      max-width: 980px;
       display: flex;
       justify-content: space-between;
       transform: translateX(-50%);
       pointer-events: none;
     }}
     #facePanel .fp-brow {{
-      width: min(24%,260px);
-      height: clamp(10px,1.8vh,20px);
+      width: 24%;
+      max-width: 260px;
+      height: 1.8vh;
+      min-height: 10px;
+      max-height: 20px;
       border-radius: 999px;
       background: rgba(var(--mood-rgb),.78);
       box-shadow: 0 0 22px rgba(var(--mood-rgb),.55);
@@ -3340,16 +3351,19 @@ def html_page() -> str:
     #facePanel .fp-brow-left {{ transform: rotate(var(--left-brow)); }}
     #facePanel .fp-brow-right {{ transform: rotate(var(--right-brow)); }}
     #facePanel .fp-eyes {{
-      width: min(86%,1060px);
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(28px,6vw,110px);
+      width: 86%;
+      max-width: 1060px;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
       transform: translateY(-3%);
     }}
     #facePanel .fp-eye {{
-      height: clamp(120px,22vh,280px);
-      border-radius: clamp(28px,5vw,72px);
+      width: 44%;
+      height: 22vh;
+      min-height: 120px;
+      max-height: 280px;
+      border-radius: 50px;
       background: var(--face);
       box-shadow: 0 0 26px rgba(232,251,255,.95),0 0 90px rgba(var(--mood-rgb),.45);
       transform: translateY(var(--look-y,0)) rotate(var(--eye-tilt)) scaleY(var(--blink,1));
@@ -3375,9 +3389,12 @@ def html_page() -> str:
     #facePanel .fp-mouth {{
       position:absolute;
       left:50%;top:66%;
-      width: min(32%,360px);
-      height: clamp(20px,5vh,58px);
-      border: clamp(7px,1.5vw,16px) solid var(--face);
+      width: 32%;
+      max-width: 360px;
+      height: 5vh;
+      min-height: 20px;
+      max-height: 58px;
+      border: 12px solid var(--face);
       border-top:0;
       border-radius:0 0 999px 999px;
       transform:translateX(-50%) scaleY(var(--talk,1));
@@ -3386,15 +3403,20 @@ def html_page() -> str:
     }}
     #facePanel .fp-cheeks {{
       position:absolute;top:57%;left:50%;
-      width:min(82%,980px);
+      width:82%;
+      max-width: 980px;
       display:flex;justify-content:space-between;
       transform:translateX(-50%);
       pointer-events:none;
     }}
     #facePanel .fp-cheek {{
-      width:clamp(32px,6vw,72px);
-      height:clamp(18px,3.5vw,40px);
-      border-radius:999px;
+      width: 6vw;
+      min-width: 32px;
+      max-width: 72px;
+      height: 3.5vw;
+      min-height: 18px;
+      max-height: 40px;
+      border-radius: 999px;
       background:rgba(57,217,138,.22);
       box-shadow:0 0 28px rgba(57,217,138,.32);
       opacity:0;
@@ -3404,19 +3426,22 @@ def html_page() -> str:
       position:absolute;
       left:50%;bottom:6%;
       display:grid;gap:4px;
-      width:min(78%,700px);
+      width: 78%;
+      max-width: 700px;
       text-align:center;
       transform:translateX(-50%);
       pointer-events:none;
     }}
     #fpMood {{
-      font-size:clamp(16px,3vw,38px);
+      font-size: 18px;
+      font-size: 3vw;
       font-weight:900;
       color:var(--face);
       text-shadow:0 0 22px rgba(var(--mood-rgb),.64);
     }}
     #fpHint {{
-      font-size:clamp(11px,1.6vw,16px);
+      font-size: 12px;
+      font-size: 1.6vw;
       font-weight:800;
       color:rgba(232,251,255,.7);
     }}
@@ -3429,7 +3454,10 @@ def html_page() -> str:
       border-top:1px solid rgba(232,251,255,.12);
       background:rgba(5,8,11,.65);
       color:rgba(232,251,255,.78);
-      font:700 clamp(11px,1.5vw,15px) ui-monospace,SFMono-Regular,Consolas,monospace;
+      font-size: 11px;
+      font-size: 1.5vw;
+      font-weight: 700;
+      font-family: ui-monospace,SFMono-Regular,Consolas,monospace;
       flex-shrink:0;
     }}
     #fpStopBtn {{
@@ -3451,22 +3479,22 @@ def html_page() -> str:
     #tab-face.fs-idle {{ --mood:var(--happy);--mood-rgb:57,217,138;--left-brow:-5deg;--right-brow:5deg; }}
     #tab-face.fs-idle .fp-cheek,#tab-face.fs-idle .fp-sparkles,
     #tab-face.fs-welcome .fp-cheek,#tab-face.fs-welcome .fp-sparkles {{ opacity:1; }}
-    #tab-face.fs-idle .fp-mouth,#tab-face.fs-welcome .fp-mouth {{ width:min(40%,460px);height:clamp(42px,8vh,86px);border-color:var(--happy); }}
+    #tab-face.fs-idle .fp-mouth,#tab-face.fs-welcome .fp-mouth {{ width: 40%; max-width: 460px; height: 8vh; min-height: 42px; max-height: 86px; border-color:var(--happy); }}
     #tab-face.fs-manual {{ --mood:#75d7ff;--mood-rgb:117,215,255;--left-brow:7deg;--right-brow:-7deg; }}
-    #tab-face.fs-manual .fp-mouth {{ width:min(24%,290px);height:clamp(11px,2vh,26px);border-color:#75d7ff; }}
+    #tab-face.fs-manual .fp-mouth {{ width: 24%; max-width: 290px; height: 2vh; min-height: 11px; max-height: 26px; border-color:#75d7ff; }}
     #tab-face.fs-welcome {{ --mood:var(--happy);--mood-rgb:57,217,138;--left-brow:-9deg;--right-brow:9deg; }}
     #tab-face.fs-return {{ --mood:var(--warn);--mood-rgb:255,209,102;--left-brow:10deg;--right-brow:-10deg; }}
-    #tab-face.fs-return .fp-mouth {{ width:min(28%,320px);height:clamp(16px,3vh,38px);border-color:var(--warn); }}
-    #tab-face.fs-talk .fp-mouth {{ width:min(26%,310px);height:clamp(50px,9vh,100px);border-radius:999px;border-top:clamp(7px,1.5vw,16px) solid var(--face); }}
+    #tab-face.fs-return .fp-mouth {{ width: 28%; max-width: 320px; height: 3vh; min-height: 16px; max-height: 38px; border-color:var(--warn); }}
+    #tab-face.fs-talk .fp-mouth {{ width: 26%; max-width: 310px; height: 9vh; min-height: 50px; max-height: 100px; border-radius: 999px; border-top: 12px solid var(--face); }}
     #tab-face.fs-talk {{ --mood:var(--accent);--mood-rgb:50,181,255;--left-brow:-3deg;--right-brow:3deg; }}
     #tab-face.fs-dance {{ --mood:var(--happy);--mood-rgb:57,217,138;--eye-tilt:-2deg; }}
     #tab-face.fs-dance .fp-sparkles,.fp-dance .fp-cheek {{ opacity:1; }}
     #tab-face.fs-dance .fp-eye {{ background:var(--happy);box-shadow:0 0 34px rgba(57,217,138,.9),0 0 100px rgba(57,217,138,.38); }}
     #tab-face.fs-error {{ --mood:var(--bad);--mood-rgb:255,95,87;--left-brow:16deg;--right-brow:-16deg; }}
     #tab-face.fs-error .fp-eye {{ background:var(--bad);box-shadow:0 0 34px rgba(255,95,87,.85),0 0 100px rgba(255,95,87,.36); }}
-    #tab-face.fs-error .fp-mouth {{ width:min(28%,340px);height:0;border-color:var(--bad);border-top:clamp(7px,1.5vw,16px) solid var(--bad);border-radius:999px; }}
+    #tab-face.fs-error .fp-mouth {{ width: 28%; max-width: 340px; height: 0; border-color:var(--bad); border-top: 12px solid var(--bad); border-radius:999px; }}
     #tab-face.fs-bootstrap .fp-eye {{ border-radius:999px;transform:translateY(4vh) scaleY(0.16); }}
-    #tab-face.fs-bootstrap .fp-mouth {{ width:min(18%,210px);height:0;border-top:clamp(7px,1.5vw,16px) solid var(--face-dim);border-color:var(--face-dim); }}
+    #tab-face.fs-bootstrap .fp-mouth {{ width: 18%; max-width: 210px; height: 0; border-top: 12px solid var(--face-dim); border-color:var(--face-dim); }}
   </style>
 </head>
 <body>
@@ -4041,15 +4069,15 @@ def html_page() -> str:
         }}
       }}
 
-      async function fpRefresh() {{
-        try {{
-          const res = await fetch('/api/status', {{cache:'no-store'}});
-          fpRender(await res.json());
-        }} catch (e) {{
-          fpState.textContent = 'PLUTO LINK LOST';
-          fpImu.textContent   = 'retrying';
-          fpSetMood('error');
-        }}
+      function fpRefresh() {{
+        fetch('/api/status', {{cache:'no-store'}})
+          .then(function(res) {{ return res.json(); }})
+          .then(function(data) {{ fpRender(data); }})
+          .catch(function(e) {{
+            fpState.textContent = 'PLUTO LINK LOST';
+            fpImu.textContent   = 'retrying';
+            fpSetMood('error');
+          }});
       }}
 
       function fpAnimate() {{
@@ -4081,17 +4109,20 @@ def html_page() -> str:
         if (!fpAnimating) {{ fpAnimating = true; fpAnimate(); }}
       }};
 
-      fpStop.addEventListener('click', async (e) => {{
+      fpStop.addEventListener('click', function(e) {{
         e.stopPropagation();
         fpStop.textContent = 'STOPPING';
-        try {{
-          await fetch('/api/emergency-stop', {{method:'POST'}});
-          fpStop.textContent = 'STOP SENT';
-        }} catch (err) {{
-          fpStop.textContent = 'STOP ERROR';
-        }}
-        setTimeout(() => {{ fpStop.textContent = 'STOP'; }}, 1800);
-        await fpRefresh();
+        fetch('/api/emergency-stop', {{method:'POST'}})
+          .then(function() {{
+            fpStop.textContent = 'STOP SENT';
+          }})
+          .catch(function() {{
+            fpStop.textContent = 'STOP ERROR';
+          }})
+          .then(function() {{
+            setTimeout(function() {{ fpStop.textContent = 'STOP'; }}, 1800);
+            fpRefresh();
+          }});
       }});
 
       /* Always poll so face data is fresh whether tab visible or not */
@@ -5748,23 +5779,31 @@ def face_page() -> str:
       user-select: none;
     }
     .face-screen {
-      width: 100vw;
-      height: 100dvh;
-      min-height: 100vh;
-      display: grid;
-      grid-template-rows: 1fr auto;
-      padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      width: 100%;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 18px;
+      padding-top: calc(18px + env(safe-area-inset-top));
+      padding-right: calc(18px + env(safe-area-inset-right));
+      padding-bottom: calc(18px + env(safe-area-inset-bottom));
+      padding-left: calc(18px + env(safe-area-inset-left));
     }
     .face {
       position: relative;
-      display: grid;
-      place-items: center;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       min-height: 0;
     }
     .halo {
       position: absolute;
-      width: min(78vw, 980px);
-      aspect-ratio: 1 / 0.5;
+      width: 78vw;
+      max-width: 980px;
+      height: 39vw;
+      max-height: 490px;
       border-radius: 50%;
       background: radial-gradient(ellipse at center, rgba(var(--mood-rgb), 0.28), transparent 68%);
       filter: blur(18px);
@@ -5774,16 +5813,19 @@ def face_page() -> str:
       pointer-events: none;
     }
     .eyes {
-      width: min(86vw, 1160px);
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(34px, 8vw, 120px);
+      width: 86vw;
+      max-width: 1160px;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
       transform: translateY(-3vh);
     }
     .eye {
-      height: clamp(142px, 29vh, 330px);
-      border-radius: clamp(34px, 7vw, 82px);
+      width: 44%;
+      height: 29vh;
+      min-height: 142px;
+      max-height: 330px;
+      border-radius: 60px;
       background: var(--face);
       box-shadow: 0 0 26px rgba(232, 251, 255, 0.95), 0 0 90px rgba(var(--mood-rgb), 0.45);
       transform: translateY(var(--look-y, 0)) rotate(var(--eye-tilt)) scaleY(var(--blink, 1));
@@ -5812,9 +5854,12 @@ def face_page() -> str:
       position: absolute;
       left: 50%;
       top: 67%;
-      width: min(32vw, 390px);
-      height: clamp(22px, 5vh, 62px);
-      border: clamp(8px, 1.7vw, 18px) solid var(--face);
+      width: 32vw;
+      max-width: 390px;
+      height: 5vh;
+      min-height: 22px;
+      max-height: 62px;
+      border: 12px solid var(--face);
       border-top: 0;
       border-radius: 0 0 999px 999px;
       transform: translateX(-50%) scaleY(var(--talk, 1));
@@ -5825,15 +5870,19 @@ def face_page() -> str:
       position: absolute;
       top: 21%;
       left: 50%;
-      width: min(78vw, 1040px);
+      width: 78vw;
+      max-width: 1040px;
       display: flex;
       justify-content: space-between;
       transform: translateX(-50%);
       pointer-events: none;
     }
     .brow {
-      width: min(24vw, 300px);
-      height: clamp(10px, 1.8vh, 20px);
+      width: 24vw;
+      max-width: 300px;
+      height: 1.8vh;
+      min-height: 10px;
+      max-height: 20px;
       border-radius: 999px;
       background: rgba(var(--mood-rgb), 0.78);
       box-shadow: 0 0 22px rgba(var(--mood-rgb), 0.55);
@@ -5846,15 +5895,20 @@ def face_page() -> str:
       position: absolute;
       top: 58%;
       left: 50%;
-      width: min(82vw, 1060px);
+      width: 82vw;
+      max-width: 1060px;
       display: flex;
       justify-content: space-between;
       transform: translateX(-50%);
       pointer-events: none;
     }
     .cheek {
-      width: clamp(36px, 7vw, 82px);
-      height: clamp(20px, 4vw, 46px);
+      width: 7vw;
+      min-width: 36px;
+      max-width: 82px;
+      height: 4vw;
+      min-height: 20px;
+      max-height: 46px;
       border-radius: 999px;
       background: rgba(57, 217, 138, 0.22);
       box-shadow: 0 0 28px rgba(57, 217, 138, 0.32);
@@ -5870,8 +5924,12 @@ def face_page() -> str:
     }
     .sparkles i {
       position: absolute;
-      width: clamp(8px, 1.4vw, 18px);
-      height: clamp(8px, 1.4vw, 18px);
+      width: 1.4vw;
+      min-width: 8px;
+      max-width: 18px;
+      height: 1.4vw;
+      min-height: 8px;
+      max-height: 18px;
       border-radius: 4px;
       background: var(--mood);
       box-shadow: 0 0 24px var(--mood);
@@ -5888,19 +5946,22 @@ def face_page() -> str:
       bottom: 8%;
       display: grid;
       gap: 4px;
-      width: min(78vw, 760px);
+      width: 78vw;
+      max-width: 760px;
       text-align: center;
       transform: translateX(-50%);
       pointer-events: none;
     }
     #faceMood {
-      font-size: clamp(18px, 3.6vw, 42px);
+      font-size: 24px;
+      font-size: 3.6vw;
       font-weight: 900;
       color: var(--face);
       text-shadow: 0 0 22px rgba(var(--mood-rgb), 0.64);
     }
     #faceHint {
-      font-size: clamp(12px, 1.8vw, 18px);
+      font-size: 14px;
+      font-size: 1.8vw;
       font-weight: 800;
       color: rgba(232, 251, 255, 0.7);
     }
@@ -5914,7 +5975,10 @@ def face_page() -> str:
       border-radius: 8px;
       background: rgba(5, 8, 11, 0.58);
       color: rgba(232, 251, 255, 0.78);
-      font: 700 clamp(12px, 1.7vw, 18px) ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 14px;
+      font-size: 1.7vw;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     }
     .face-stop {
       min-height: 38px;
@@ -5934,27 +5998,26 @@ def face_page() -> str:
     .state-bootstrap { --mood: var(--face-dim); --mood-rgb: 130, 216, 236; --halo-scale: 0.82; --left-brow: 0deg; --right-brow: 0deg; }
     .state-idle { --mood: var(--happy); --mood-rgb: 57, 217, 138; --left-brow: -5deg; --right-brow: 5deg; }
     .state-idle .cheek, .state-idle .sparkles, .state-welcome .cheek, .state-welcome .sparkles { opacity: 1; }
-    .state-idle .mouth, .state-welcome .mouth { width: min(40vw, 480px); height: clamp(46px, 8vh, 92px); border-color: var(--happy); }
+    .state-idle .mouth, .state-welcome .mouth { width: 40vw; max-width: 480px; height: 8vh; min-height: 46px; max-height: 92px; border-color: var(--happy); }
     .state-manual { --mood: #75d7ff; --mood-rgb: 117, 215, 255; --left-brow: 7deg; --right-brow: -7deg; --eye-tilt: 0deg; }
-    .state-manual .mouth { width: min(24vw, 300px); height: clamp(12px, 2vh, 28px); border-color: #75d7ff; }
+    .state-manual .mouth { width: 24vw; max-width: 300px; height: 2vh; min-height: 12px; max-height: 28px; border-color: #75d7ff; }
     .state-welcome { --mood: var(--happy); --mood-rgb: 57, 217, 138; --left-brow: -9deg; --right-brow: 9deg; }
     .state-return { --mood: var(--warn); --mood-rgb: 255, 209, 102; --left-brow: 10deg; --right-brow: -10deg; }
-    .state-return .mouth { width: min(28vw, 340px); height: clamp(18px, 3vh, 40px); border-color: var(--warn); }
-    .state-talk .mouth { width: min(26vw, 320px); height: clamp(54px, 9vh, 106px); border-radius: 999px; border-top: clamp(8px, 1.7vw, 18px) solid var(--face); }
+    .state-return .mouth { width: 28vw; max-width: 340px; height: 3vh; min-height: 18px; max-height: 40px; border-color: var(--warn); }
+    .state-talk .mouth { width: 26vw; max-width: 320px; height: 9vh; min-height: 54px; max-height: 106px; border-radius: 999px; border-top: 12px solid var(--face); }
     .state-talk { --mood: var(--accent); --mood-rgb: 50, 181, 255; --left-brow: -3deg; --right-brow: 3deg; }
     .state-dance { --mood: var(--happy); --mood-rgb: 57, 217, 138; --eye-tilt: -2deg; }
     .state-dance .sparkles, .state-dance .cheek { opacity: 1; }
     .state-dance .eye { background: var(--happy); box-shadow: 0 0 34px rgba(57, 217, 138, 0.9), 0 0 100px rgba(57, 217, 138, 0.38); }
     .state-game { --mood: #c7a6ff; --mood-rgb: 199, 166, 255; --left-brow: -12deg; --right-brow: 4deg; }
-    .state-game .mouth { width: min(30vw, 360px); height: clamp(18px, 3vh, 42px); border-color: #c7a6ff; }
+    .state-game .mouth { width: 30vw; max-width: 360px; height: 3vh; min-height: 18px; max-height: 42px; border-color: #c7a6ff; }
     .state-error { --mood: var(--bad); --mood-rgb: 255, 95, 87; --left-brow: 16deg; --right-brow: -16deg; }
     .state-error .eye { background: var(--bad); box-shadow: 0 0 34px rgba(255, 95, 87, 0.85), 0 0 100px rgba(255, 95, 87, 0.36); }
-    .state-error .mouth { width: min(30vw, 360px); height: 0; border-color: var(--bad); border-top: clamp(8px, 1.7vw, 18px) solid var(--bad); border-radius: 999px; }
+    .state-error .mouth { width: 30vw; max-width: 360px; height: 0; border-color: var(--bad); border-top: 12px solid var(--bad); border-radius: 999px; }
     .state-bootstrap .eye { border-radius: 999px; transform: translateY(4vh) scaleY(0.16); }
-    .state-bootstrap .mouth { width: min(18vw, 220px); height: 0; border-top: clamp(8px, 1.7vw, 18px) solid var(--face-dim); border-color: var(--face-dim); }
+    .state-bootstrap .mouth { width: 18vw; max-width: 220px; height: 0; border-top: 12px solid var(--face-dim); border-color: var(--face-dim); }
     @media (orientation: portrait) {
-      .eyes { width: 88vw; gap: 9vw; }
-      .eye { height: clamp(112px, 20vh, 230px); }
+      .eyes { width: 88vw; }
       .mouth { top: 63%; }
     }
   </style>
@@ -6051,15 +6114,15 @@ def face_page() -> str:
         imuText.textContent = data.stm32_runtime && data.stm32_runtime.running ? 'IMU waiting' : 'STM32 offline';
       }
     }
-    async function refresh() {
-      try {
-        const res = await fetch('/api/status', {cache: 'no-store'});
-        render(await res.json());
-      } catch (err) {
-        stateText.textContent = 'PLUTO LINK LOST';
-        imuText.textContent = 'retrying';
-        setMood('error');
-      }
+    function refresh() {
+      fetch('/api/status', {cache: 'no-store'})
+        .then(function(res) { return res.json(); })
+        .then(function(data) { render(data); })
+        .catch(function(err) {
+          stateText.textContent = 'PLUTO LINK LOST';
+          imuText.textContent = 'retrying';
+          setMood('error');
+        });
     }
     function animate() {
       const now = performance.now();
@@ -6087,17 +6150,20 @@ def face_page() -> str:
     screen.addEventListener('click', () => {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
     });
-    stopButton.addEventListener('click', async (event) => {
+    stopButton.addEventListener('click', function(event) {
       event.stopPropagation();
       stopButton.textContent = 'STOPPING';
-      try {
-        await fetch('/api/emergency-stop', {method: 'POST'});
-        stopButton.textContent = 'STOP SENT';
-      } catch (err) {
-        stopButton.textContent = 'STOP ERROR';
-      }
-      setTimeout(() => { stopButton.textContent = 'STOP'; }, 1800);
-      await refresh();
+      fetch('/api/emergency-stop', {method: 'POST'})
+        .then(function() {
+          stopButton.textContent = 'STOP SENT';
+        })
+        .catch(function() {
+          stopButton.textContent = 'STOP ERROR';
+        })
+        .then(function() {
+          setTimeout(function() { stopButton.textContent = 'STOP'; }, 1800);
+          refresh();
+        });
     });
     refresh();
     setInterval(refresh, 500);
